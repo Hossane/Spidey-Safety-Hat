@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hat Detect · Site Safety</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #f4f5f7; --panel: #ffffff; --text: #1d2330; --muted: #6b7385; --line: #e3e6ec;
+    --high: #d63c3c; --medium: #e29a1b; --low: #3b82c4; --ok: #2f9e66;
+    --high-bg: #fde9e9; --medium-bg: #fdf1dc; --low-bg: #e6f0fa;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12151b; --panel: #1b1f27; --text: #e8ebf1; --muted: #98a1b3; --line: #2c323d;
+      --high-bg: #3a1d1f; --medium-bg: #3a2d16; --low-bg: #172a3d;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  header { display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: center; justify-content: space-between;
+           padding: 16px 24px; background: var(--panel); border-bottom: 1px solid var(--line); }
+  h1 { font-size: 18px; margin: 0; letter-spacing: .2px; }
+  h1 small { color: var(--muted); font-weight: 400; margin-left: 8px; }
+  .controls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .seg button { border: 0; background: transparent; color: var(--text); padding: 6px 12px; cursor: pointer; font: inherit; }
+  .seg button.on { background: var(--text); color: var(--panel); }
+  select { font: inherit; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--line);
+           background: var(--panel); color: var(--text); }
+  .live { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); }
+  .dot.stale { background: var(--medium); } .dot.err { background: var(--high); }
+  main { padding: 20px 24px 40px; display: grid; gap: 16px; grid-template-columns: repeat(12, 1fr); max-width: 1500px; margin: 0 auto; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; min-width: 0; }
+  .card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); margin: 0 0 12px; font-weight: 600; }
+  .kpis { grid-column: 1 / -1; display: grid; gap: 16px; grid-template-columns: repeat(5, 1fr); }
+  .kpi .v { font-size: 30px; font-weight: 650; line-height: 1.1; }
+  .kpi .s { color: var(--muted); font-size: 12px; margin-top: 4px; }
+  .kpi.alarm .v { color: var(--high); }
+  .span8 { grid-column: span 8; } .span4 { grid-column: span 4; } .span12 { grid-column: 1 / -1; }
+  .chart { position: relative; height: 260px; }
+  .zones { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 4px; }
+  .zone { border-radius: 10px; padding: 14px 8px; text-align: center; border: 1px solid var(--line); }
+  .zone .n { font-size: 26px; font-weight: 650; } .zone .l { color: var(--muted); font-size: 12px; }
+  .zone-break { margin-top: 12px; font-size: 12px; color: var(--muted); }
+  .wearer { text-align: center; color: var(--muted); font-size: 12px; margin-top: 8px; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; white-space: nowrap; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  tr.quiet td { color: var(--muted); }
+  .sev { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; }
+  .sev.high { background: var(--high-bg); color: var(--high); }
+  .sev.medium { background: var(--medium-bg); color: var(--medium); }
+  .sev.low { background: var(--low-bg); color: var(--low); }
+  .feed { max-height: 420px; overflow: auto; }
+  .feed .item { display: grid; grid-template-columns: 70px 1fr; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+  .feed .t { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .feed .what { font-weight: 600; } .feed .ctl { color: var(--muted); font-size: 12px; }
+  .empty { color: var(--muted); padding: 20px 0; text-align: center; }
+  .banner { grid-column: 1 / -1; background: var(--high-bg); color: var(--high); border-radius: 10px; padding: 10px 14px; display: none; }
+  .tablewrap { overflow-x: auto; }
+  @media (max-width: 1000px) {
+    .kpis { grid-template-columns: repeat(2, 1fr); }
+    .span8, .span4 { grid-column: 1 / -1; }
+  }
+  @media (max-width: 600px) { header, main { padding-left: 16px; padding-right: 16px; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Site Safety · Hazard Monitor <small>Hat Detect on QNX · Tiger Cloud</small></h1>
+  <div class="controls">
+    <div class="seg" id="range">
+      <button data-r="1h">1 h</button><button data-r="8h">Shift (8 h)</button>
+      <button data-r="24h">24 h</button><button data-r="7d">7 days</button>
+    </div>
+    <select id="device"><option value="">All hats</option></select>
+    <span class="live"><span class="dot" id="dot"></span><span id="updated">connecting…</span></span>
+  </div>
+</header>
+<main>
+  <div class="banner" id="banner"></div>
+  <section class="kpis">
+    <div class="card kpi"><h2>Detections</h2><div class="v" id="k-det">–</div><div class="s" id="k-det-s"></div></div>
+    <div class="card kpi"><h2>Alerts to wearers</h2><div class="v" id="k-alerts">–</div><div class="s">after 3 s cooldown</div></div>
+    <div class="card kpi alarm"><h2>High-severity alerts</h2><div class="v" id="k-high">–</div><div class="s">alarms, sirens, impacts, horn + vehicle</div></div>
+    <div class="card kpi"><h2>Hazard types</h2><div class="v" id="k-types">–</div><div class="s" id="k-types-s"></div></div>
+    <div class="card kpi"><h2>Last alert</h2><div class="v" id="k-last" style="font-size:22px">–</div><div class="s" id="k-last-s"></div></div>
+  </section>
+
+  <section class="card span8">
+    <h2>Alerts over time, by severity</h2>
+    <div class="chart"><canvas id="timeline"></canvas></div>
+  </section>
+  <section class="card span4">
+    <h2>Where alerts were around the wearer</h2>
+    <div class="zones" id="zones"></div>
+    <div class="wearer">▲ wearer facing forward (camera view)</div>
+    <div class="zone-break" id="zone-break"></div>
+  </section>
+
+  <section class="card span8">
+    <h2>Hazards identified · alerts by hazard</h2>
+    <div class="chart"><canvas id="hazards"></canvas></div>
+  </section>
+  <section class="card span4">
+    <h2>Recent alerts</h2>
+    <div class="feed" id="feed"></div>
+  </section>
+
+  <section class="card span12">
+    <h2>Hazard register</h2>
+    <div class="tablewrap"><table>
+      <thead><tr><th>Hazard</th><th>Severity</th><th>What it is</th><th class="num">Detections</th>
+        <th class="num">Alerts</th><th class="num">Peak conf.</th><th>Last seen</th><th>Recommended control</th></tr></thead>
+      <tbody id="register"></tbody>
+    </table></div>
+  </section>
+</main>
+<script>
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const SEV = ["high", "medium", "low"];
+const NAMES = { COMBINED: "Horn + vehicle", ALARM: "Alarm", SIREN: "Siren", IMPACT: "Impact / crash", FIRE: "Fire",
+                HORN: "Horn", VOICE: "Shouting", VEHICLE: "Vehicle", SHARP: "Sharp object", PERSON: "Person" };
+const name = h => NAMES[h] || h;
+let state = { range: localGet("range") || "8h", device: localGet("device") || "" };
+let charts = {}, lastOk = 0;
+
+function localGet(k) { try { return localStorage.getItem("hd-" + k); } catch { return null; } }
+function localSet(k, v) { try { localStorage.setItem("hd-" + k, v); } catch {} }
+function esc(s) { return String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+function ago(iso) {
+  if (!iso) return "never";
+  const s = Math.max(0, (Date.now() - new Date(iso)) / 1000);
+  if (s < 60) return Math.round(s) + " s ago";
+  if (s < 3600) return Math.round(s / 60) + " min ago";
+  if (s < 86400) return Math.round(s / 3600) + " h ago";
+  return Math.round(s / 86400) + " d ago";
+}
+const clock = iso => iso ? new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "";
+const sevPill = s => `<span class="sev ${s}">${s}</span>`;
+
+document.querySelectorAll("#range button").forEach(b => {
+  b.classList.toggle("on", b.dataset.r === state.range);
+  b.onclick = () => { state.range = b.dataset.r; localSet("range", state.range);
+    document.querySelectorAll("#range button").forEach(x => x.classList.toggle("on", x === b)); load(); };
+});
+document.getElementById("device").onchange = e => { state.device = e.target.value; localSet("device", state.device); load(); };
+
+function chart(id, cfg) {
+  if (charts[id]) { charts[id].data = cfg.data; charts[id].update("none"); return; }
+  charts[id] = new Chart(document.getElementById(id), cfg);
+}
+function axes(stacked, horizontal) {
+  const grid = { color: css("--line") }, ticks = { color: css("--muted") };
+  return { x: { stacked, grid: horizontal ? grid : { display: false }, ticks, beginAtZero: true },
+           y: { stacked, grid: horizontal ? { display: false } : grid, ticks, beginAtZero: true } };
+}
+
+function render(d) {
+  const k = d.kpis;
+  document.getElementById("k-det").textContent = k.detections.toLocaleString();
+  document.getElementById("k-det-s").textContent = `${k.devices} hat${k.devices === 1 ? "" : "s"} reporting · last ${ago(k.last_event)}`;
+  document.getElementById("k-alerts").textContent = k.alerts.toLocaleString();
+  document.getElementById("k-high").textContent = k.high_alerts.toLocaleString();
+  document.getElementById("k-types").textContent = k.hazard_types;
+  document.getElementById("k-types-s").textContent = `of ${d.register.length} in the register`;
+  document.getElementById("k-last").textContent = k.last_alert ? name(k.last_alert.hazard) : "None";
+  document.getElementById("k-last-s").textContent = k.last_alert ? `${ago(k.last_alert.time)} · ${k.last_alert.device}` : "no alerts in this period";
+
+  const sel = document.getElementById("device");
+  const opts = [""].concat(d.devices.map(x => x.id));
+  if (sel.options.length !== opts.length || opts.some((o, i) => sel.options[i].value !== o)) {
+    sel.innerHTML = opts.map(o => `<option value="${esc(o)}">${o ? esc(o) : "All hats"}</option>`).join("");
+  }
+  sel.value = state.device;
+
+  chart("timeline", { type: "bar",
+    data: { labels: d.timeline.labels, datasets: SEV.map(s => ({ label: s[0].toUpperCase() + s.slice(1),
+      data: d.timeline.series[s] || [], backgroundColor: css("--" + s), borderRadius: 3, maxBarThickness: 28 })) },
+    options: { maintainAspectRatio: false, animation: false, scales: axes(true, false),
+      plugins: { legend: { position: "bottom", labels: { color: css("--muted"), boxWidth: 12 } } } } });
+
+  const hz = d.hazards.reduce((m, h) => { (m[h.hazard] ||= { ...h, detections: 0, alerts: 0 });
+    m[h.hazard].detections += h.detections; m[h.hazard].alerts += h.alerts; return m; }, {});
+  const hl = Object.values(hz);
+  chart("hazards", { type: "bar",
+    data: { labels: hl.map(h => name(h.hazard)), datasets: [
+      { label: "Alerts", data: hl.map(h => h.alerts), backgroundColor: hl.map(h => css("--" + h.severity)),
+        borderRadius: 3, maxBarThickness: 22 } ] },
+    options: { indexAxis: "y", maintainAspectRatio: false, animation: false, scales: axes(false, true),
+      plugins: { legend: { display: false },
+        tooltip: { callbacks: { label: c => ` ${c.raw} alerts (${hl[c.dataIndex].severity})`,
+                                afterLabel: c => ` ${hl[c.dataIndex].detections.toLocaleString()} detections in total` } } } } });
+
+  const pos = { left: 0, centre: 0, right: 0 }, byZone = { left: {}, centre: {}, right: {} };
+  d.positions.forEach(p => { if (p.position in pos) { pos[p.position] += p.count;
+    byZone[p.position][p.hazard] = (byZone[p.position][p.hazard] || 0) + p.count; } });
+  const max = Math.max(1, ...Object.values(pos));
+  document.getElementById("zones").innerHTML = ["left", "centre", "right"].map(z => {
+    const a = pos[z] / max;
+    return `<div class="zone" style="background: color-mix(in srgb, var(--high) ${Math.round(a * 35)}%, var(--panel))">
+      <div class="n">${pos[z]}</div><div class="l">${z}</div></div>`; }).join("");
+  document.getElementById("zone-break").innerHTML = ["left", "centre", "right"].map(z => {
+    const parts = Object.entries(byZone[z]).sort((a, b) => b[1] - a[1]).map(([h, n]) => `${name(h)} ${n}`);
+    return parts.length ? `<div><b>${z}:</b> ${esc(parts.join(", "))}</div>` : ""; }).join("") ||
+    "Video alerts (people, vehicles) show which side of the wearer they came from.";
+
+  document.getElementById("feed").innerHTML = d.recent.length ? d.recent.map(r => `
+    <div class="item"><div class="t">${clock(r.time)}<br>${esc(r.device)}</div>
+      <div><div class="what">${sevPill(r.severity)} ${esc(name(r.hazard))}${r.position ? " · " + esc(r.position) : ""}</div>
+        <div class="ctl">${esc(r.label)} (${Math.round(r.score * 100)}%) · ${esc(r.control || "")}</div></div></div>`).join("")
+    : `<div class="empty">No alerts in this period</div>`;
+
+  document.getElementById("register").innerHTML = d.register.map(r => `
+    <tr class="${r.detections ? "" : "quiet"}"><td><b>${esc(name(r.hazard))}</b><br><span style="color:var(--muted);font-size:12px">${esc(r.source)}</span></td>
+      <td>${sevPill(r.severity)}</td><td>${esc(r.description)}</td>
+      <td class="num">${r.detections.toLocaleString()}</td><td class="num">${r.alerts.toLocaleString()}</td>
+      <td class="num">${r.peak != null ? Math.round(r.peak * 100) + "%" : "–"}</td>
+      <td style="white-space:nowrap">${r.last_seen ? ago(r.last_seen) : "–"}</td><td>${esc(r.control)}</td></tr>`).join("");
+}
+
+async function load() {
+  const dot = document.getElementById("dot"), upd = document.getElementById("updated"), banner = document.getElementById("banner");
+  try {
+    const res = await fetch(`/api/data?range=${state.range}&device=${encodeURIComponent(state.device)}`);
+    const d = await res.json();
+    if (!res.ok) throw new Error(d.error || res.statusText);
+    render(d);
+    lastOk = Date.now();
+    dot.className = "dot"; upd.textContent = "live · updated " + clock(d.now);
+    banner.style.display = "none";
+  } catch (e) {
+    dot.className = "dot err"; upd.textContent = "can't reach Tiger Cloud";
+    banner.textContent = "Dashboard can't load data: " + e.message; banner.style.display = "block";
+  }
+}
+load();
+setInterval(load, 5000);
+setInterval(() => { if (lastOk && Date.now() - lastOk > 15000) document.getElementById("dot").className = "dot stale"; }, 2000);
+</script>
+</body>
+</html>
