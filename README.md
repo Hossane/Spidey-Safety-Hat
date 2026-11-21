@@ -37,6 +37,7 @@ The laptop companion only lends a microphone, a speaker and the database connect
 14. [Running the individual components](#running-the-individual-components)
 15. [Running the complete system](#running-the-complete-system)
 16. [Running the dashboard](#running-the-dashboard)
+    - [Trying it without the Pi](#trying-it-without-the-pi)
 17. [Running the tests](#running-the-tests)
 18. [QNX-specific setup](#qnx-specific-setup)
 19. [Limitations and future work](#limitations-and-future-work)
@@ -441,6 +442,52 @@ To see it before the hat has run, `python scripts/tiger_bridge.py demo` fills th
 database with 8 hours of sample events for device `demo-01`. It makes them by running
 simulated detections through the real fusion engine, and it replaces earlier demo data.
 `purge-demo` removes the sample events.
+
+### Trying it without the Pi
+
+The laptop side, the database and the dashboard can all be checked on a laptop alone.
+The live alert loop needs the Pi, because the companion gets its events from
+`hat_detect.py` over SSH.
+
+1. **Set up** (from the project root):
+
+   ```bash
+   python3 -m venv .venv && source .venv/bin/activate
+   pip install "psycopg[binary]" python-dotenv sounddevice numpy
+   python -m unittest discover -s tests                  # expect OK (9 database tests skipped)
+   python scripts/laptop_companion.py --test-speaker     # a tone + "Warning! Vehicle hazard on your left"
+   ```
+
+   To hear the test alert on the JBL, pair it first and make it the default output
+   device.
+
+2. **Start a local TimescaleDB** in Docker, so you don't touch Tiger Cloud.
+   `tiger_bridge.py init` permanently migrates whichever database it is pointed at.
+
+   ```bash
+   docker run -d --name hatdetect-tsdb -p 127.0.0.1:55432:5432 \
+     -e POSTGRES_PASSWORD=localtest timescale/timescaledb:latest-pg17
+   export TIGER_DATABASE_URL=postgres://postgres:localtest@127.0.0.1:55432/postgres
+   python scripts/tiger_bridge.py init
+   python scripts/tiger_bridge.py demo                   # 8 h of sample events, hat demo-01
+   python scripts/tiger_bridge.py check
+   ```
+
+   The shell variable takes precedence over `.env`. Set it again in each new terminal.
+
+3. **Open the dashboard:** run `python scripts/dashboard.py`, then open
+   <http://localhost:8050>. Try the filters, click a multimodal event to see why it was
+   combined, and click the summary tiles.
+
+4. **Run the real-database tests** against the same container:
+
+   ```bash
+   HATDETECT_TEST_DATABASE_URL=postgres://postgres:localtest@127.0.0.1:55432/postgres \
+     python -m unittest discover -s tests                # all 71 run
+   ```
+
+5. **Clean up:** `python scripts/tiger_bridge.py purge-demo`, then
+   `docker rm -f hatdetect-tsdb`.
 
 ## Running the tests
 
