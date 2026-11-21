@@ -85,3 +85,19 @@ SELECT d.time, d.device_id, d.source, d.hazard, d.severity, d.label, d.score, d.
 FROM detections d
 LEFT JOIN hazard_types h USING (hazard)
 WHERE d.alerted;
+
+-- Who wears each hat. The dashboard's site overview lists every worker; click one to see
+-- their own hazards. A hat that reports before it is registered shows by its device_id.
+-- Simulated workers (device_id 'sim-…', from scripts/sim_crew.py) only show when the
+-- dashboard's "Simulated crew" switch is on.
+CREATE TABLE IF NOT EXISTS workers (
+    device_id  TEXT PRIMARY KEY,
+    name       TEXT NOT NULL,
+    role       TEXT NOT NULL DEFAULT 'Site worker',
+    zone       TEXT NOT NULL DEFAULT 'Unassigned',     -- site area they work in
+    simulated  BOOLEAN NOT NULL DEFAULT false
+);
+
+INSERT INTO workers (device_id, name, role, zone) VALUES
+  ('hat-01', 'Hat 01 wearer', 'Site worker', 'Test bay')
+ON CONFLICT (device_id) DO NOTHING;
