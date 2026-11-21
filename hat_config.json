@@ -1,0 +1,35 @@
+{
+  "device_id": "hat-01",
+
+  "audio": {
+    "threshold": 0.3,
+    "hop_seconds": 0.5,
+    "alert_groups": ["ALARM", "SIREN", "HORN", "VOICE", "IMPACT", "FIRE"]
+  },
+
+  "video": {
+    "camera_unit": 5,
+    "fps": 5,
+    "threshold": 0.5,
+    "alert_groups": ["PERSON", "VEHICLE", "SHARP"]
+  },
+
+  "alerts": {
+    "cooldown_seconds": 3.0,
+    "combine_window_seconds": 2.0,
+    "severity": {
+      "COMBINED": "high", "ALARM": "high", "SIREN": "high", "IMPACT": "high", "FIRE": "high",
+      "HORN": "medium", "VOICE": "medium", "VEHICLE": "medium", "SHARP": "medium",
+      "PERSON": "low"
+    }
+  },
+
+  "gpio": {
+    "enabled": true,
+    "pin_bcm": 18,
+    "buzzer": "active",
+    "tone_hz": 2700
+  },
+
+  "event_log": "~/hatdetect/events.jsonl"
+}

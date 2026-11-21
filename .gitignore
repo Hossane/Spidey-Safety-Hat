@@ -16,3 +16,6 @@ venv/
 .vscode/
 .idea/
 .DS_Store
+
+# Test inputs (regenerate with scripts/make_samples.py)
+samples/
