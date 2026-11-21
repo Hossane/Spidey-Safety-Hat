@@ -10,6 +10,7 @@ import json
 import os
 import sys
 import threading
+import time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
@@ -24,7 +25,9 @@ RANGES = {  # name -> (lookback, bucket for the timeline, label format)
     "24h": ("24 hours", "30 minutes", "%H:%M"),
     "7d": ("7 days", "6 hours", "%a %H:%M"),
 }
-DEV = "(%(dev)s::text IS NULL OR device_id = %(dev)s)"
+# Every query filters to one hat (or all), and hides simulated hats (sim-...) unless asked.
+SIM = "(%(sim)s OR device_id NOT LIKE 'sim-%%')"
+DEV = "(%(dev)s::text IS NULL OR device_id = %(dev)s) AND " + SIM
 
 
 class Db:
@@ -53,9 +56,9 @@ def iso(t):
     return t.astimezone(timezone.utc).isoformat() if t else None
 
 
-def gather(db, rng, dev):
+def gather(db, rng, dev, sim=False):
     lookback, bucket, fmt = RANGES.get(rng, RANGES["8h"])
-    p = {"lookback": lookback, "bucket": bucket, "dev": dev or None}
+    p = {"lookback": lookback, "bucket": bucket, "dev": dev or None, "sim": sim}
     since = f"now() - %(lookback)s::interval"
 
     k = db.query(f"""
@@ -94,8 +97,13 @@ def gather(db, rng, dev):
         SELECT time, device_id, hazard, severity, label, score, position, control
         FROM safety_alerts WHERE time > {since} AND {DEV}
         ORDER BY time DESC LIMIT 25""", p)
-    devices = db.query("""SELECT device_id, max(bucket) FROM detections_per_minute
-                          WHERE bucket > now() - interval '30 days' GROUP BY device_id ORDER BY 2 DESC""", {})
+    devices = db.query(f"""
+        SELECT device_id, w.name, max(m.bucket) FROM detections_per_minute m
+        LEFT JOIN workers w USING (device_id)
+        WHERE m.bucket > now() - interval '30 days' AND {SIM}
+        GROUP BY device_id, w.name ORDER BY w.name NULLS LAST, device_id""", p)
+    worker = db.query("SELECT device_id, name, role, zone, simulated FROM workers WHERE device_id = %(dev)s",
+                      p) if dev else []
 
     buckets = sorted({r[0] for r in timeline})
     series = {s: [0] * len(buckets) for s in ("high", "medium", "low")}
@@ -117,7 +125,87 @@ def gather(db, rng, dev):
                       "peak": round(r[8], 2) if r[8] is not None else None} for r in register],
         "recent": [{"time": iso(r[0]), "device": r[1], "hazard": r[2], "severity": r[3], "label": r[4],
                     "score": round(r[5], 2), "position": r[6], "control": r[7]} for r in recent],
-        "devices": [{"id": d, "last": iso(t)} for d, t in devices],
+        "devices": [{"id": d, "name": n or d, "last": iso(t)} for d, n, t in devices],
+        "worker": ({"id": worker[0][0], "name": worker[0][1], "role": worker[0][2], "zone": worker[0][3],
+                    "simulated": worker[0][4]} if worker else
+                   ({"id": dev, "name": dev, "role": "Unregistered hat", "zone": "Unassigned",
+                     "simulated": dev.startswith("sim-")} if dev else None)),
+    }
+
+
+def overview(db, rng, sim=False):
+    """Site-wide view: one row per worker, plus totals and per-zone counts. Counts come from
+    the per-minute rollup, so this stays fast as hats and history grow."""
+    t0 = time.perf_counter()
+    lookback, bucket, fmt = RANGES.get(rng, RANGES["8h"])
+    p = {"lookback": lookback, "bucket": bucket, "sim": sim}
+    since = "now() - %(lookback)s::interval"
+
+    rows = db.query(f"""
+        WITH s AS (
+            SELECT device_id, sum(detections)::int AS det, sum(alerts)::int AS alerts,
+                   sum(alerts) FILTER (WHERE severity = 'high')::int AS high,
+                   sum(alerts) FILTER (WHERE severity = 'medium')::int AS medium,
+                   sum(alerts) FILTER (WHERE severity = 'low')::int AS low, max(bucket) AS last_seen
+            FROM detections_per_minute WHERE bucket > {since} AND {SIM} GROUP BY device_id),
+        top AS (
+            SELECT DISTINCT ON (device_id) device_id, hazard FROM (
+                SELECT device_id, hazard, severity, sum(alerts) AS n FROM detections_per_minute
+                WHERE bucket > {since} AND {SIM} AND alerts > 0 GROUP BY device_id, hazard, severity) x
+            ORDER BY device_id, CASE severity WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, n DESC),
+        la AS (
+            SELECT DISTINCT ON (device_id) device_id, time, hazard, severity FROM detections
+            WHERE alerted AND time > {since} AND {SIM} ORDER BY device_id, time DESC)
+        SELECT device_id, w.name, w.role, w.zone, coalesce(w.simulated, false),
+               coalesce(s.det, 0), coalesce(s.alerts, 0), coalesce(s.high, 0), coalesce(s.medium, 0),
+               coalesce(s.low, 0), s.last_seen, top.hazard, la.time, la.hazard, la.severity
+        FROM workers w FULL JOIN s USING (device_id)
+        LEFT JOIN top USING (device_id) LEFT JOIN la USING (device_id)
+        WHERE {SIM}""", p)
+    spark = db.query(f"""
+        SELECT device_id, time_bucket(%(bucket)s::interval, bucket) AS b, severity, sum(alerts)::int
+        FROM detections_per_minute WHERE bucket > {since} AND {SIM}
+        GROUP BY device_id, b, severity ORDER BY b""", p)
+    zones = db.query(f"""
+        SELECT coalesce(w.zone, 'Unassigned'), m.severity, sum(m.alerts)::int
+        FROM detections_per_minute m LEFT JOIN workers w USING (device_id)
+        WHERE m.bucket > {since} AND {SIM} GROUP BY 1, 2""", p)
+    total_rows = db.query(f"SELECT count(*) FROM detections WHERE {SIM}", p)[0][0]
+
+    buckets = sorted({r[1] for r in spark})
+    idx = {b: i for i, b in enumerate(buckets)}
+    sparks = {}
+    series = {s: [0] * len(buckets) for s in ("high", "medium", "low")}
+    for d, b, sev, n in spark:
+        sparks.setdefault(d, [0] * len(buckets))[idx[b]] += n
+        series.setdefault(sev, [0] * len(buckets))[idx[b]] += n
+    zmap = {}
+    for z, sev, n in zones:
+        zmap.setdefault(z, {"zone": z, "high": 0, "medium": 0, "low": 0})[sev] = n
+
+    now = datetime.now(timezone.utc)
+    workers = []
+    for r in rows:
+        d = r[0]
+        workers.append({
+            "id": d, "name": r[1] or d, "role": r[2] or "Unregistered hat", "zone": r[3] or "Unassigned",
+            "simulated": bool(r[4]) or d.startswith("sim-"), "detections": r[5], "alerts": r[6],
+            "high": r[7], "medium": r[8], "low": r[9], "risk": 5 * r[7] + 2 * r[8] + r[9],
+            "last_seen": iso(r[10]), "active": bool(r[10] and (now - r[10]).total_seconds() < 600),
+            "top_hazard": r[11],
+            "last_alert": {"time": iso(r[12]), "hazard": r[13], "severity": r[14]} if r[12] else None,
+            "spark": sparks.get(d, [0] * len(buckets))})
+    workers.sort(key=lambda w: (-w["risk"], w["name"]))
+    return {
+        "now": iso(now), "range": rng, "sim": sim,
+        "kpis": {"workers": len(workers), "active": sum(w["active"] for w in workers),
+                 "alerts": sum(w["alerts"] for w in workers), "high_alerts": sum(w["high"] for w in workers),
+                 "at_risk": sum(1 for w in workers if w["high"]),
+                 "detections": sum(w["detections"] for w in workers),
+                 "total_rows": total_rows, "query_ms": round((time.perf_counter() - t0) * 1000)},
+        "timeline": {"labels": [b.astimezone().strftime(fmt) for b in buckets], "series": series},
+        "zones": sorted(zmap.values(), key=lambda z: -(5 * z["high"] + 2 * z["medium"] + z["low"])),
+        "workers": workers,
     }
 
 
@@ -137,10 +225,12 @@ def make_handler(db):
             if u.path in ("/", "/index.html"):
                 with open(HTML, "rb") as f:
                     self._send(200, f.read(), "text/html; charset=utf-8")
-            elif u.path == "/api/data":
+            elif u.path in ("/api/data", "/api/overview"):
                 q = parse_qs(u.query)
+                rng, sim = q.get("range", ["8h"])[0], q.get("sim", ["0"])[0] == "1"
                 try:
-                    data = gather(db, q.get("range", ["8h"])[0], q.get("device", [""])[0])
+                    data = (overview(db, rng, sim) if u.path == "/api/overview"
+                            else gather(db, rng, q.get("device", [""])[0], sim))
                     self._send(200, json.dumps(data), "application/json")
                 except Exception as e:  # noqa: BLE001
                     msg = str(e).splitlines()[0][:300]

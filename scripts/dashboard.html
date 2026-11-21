@@ -63,6 +63,34 @@
   .empty { color: var(--muted); padding: 20px 0; text-align: center; }
   .banner { grid-column: 1 / -1; background: var(--high-bg); color: var(--high); border-radius: 10px; padding: 10px 14px; display: none; }
   .tablewrap { overflow-x: auto; }
+  nav.tabs { display: inline-flex; gap: 4px; }
+  nav.tabs a { color: var(--muted); text-decoration: none; padding: 6px 12px; border-radius: 8px; font-weight: 600; }
+  nav.tabs a.on { background: var(--bg); color: var(--text); }
+  .toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); cursor: pointer; user-select: none; }
+  .toggle input { accent-color: var(--medium); }
+  .note { grid-column: 1 / -1; background: var(--medium-bg); color: var(--text); border-radius: 10px; padding: 10px 14px; font-size: 13px; }
+  .note b { color: var(--medium); }
+  .badge { display: inline-block; font-size: 10px; font-weight: 700; letter-spacing: .5px; padding: 1px 6px; border-radius: 4px; vertical-align: 2px; margin-left: 6px; }
+  .badge.live { background: var(--ok); color: #fff; } .badge.sim { background: var(--line); color: var(--muted); }
+  .workers tbody tr { cursor: pointer; } .workers tbody tr:hover td { background: var(--bg); }
+  .workers td { vertical-align: middle; }
+  .who b { display: block; } .who span { color: var(--muted); font-size: 12px; }
+  .status { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--line); margin-right: 6px; }
+  .status.on { background: var(--ok); }
+  .riskbar { display: flex; height: 8px; border-radius: 4px; overflow: hidden; background: var(--bg); min-width: 90px; }
+  .riskbar i { display: block; height: 100%; }
+  .spark { display: block; }
+  .zrow { display: grid; grid-template-columns: 120px 1fr 48px; gap: 10px; align-items: center; padding: 7px 0; }
+  .zrow .nm { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .zrow .ct { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); font-size: 12px; }
+  .search { font: inherit; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--text); width: 220px; max-width: 100%; }
+  .cardhead { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+  .cardhead h2 { margin: 0; }
+  .person { grid-column: 1 / -1; display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+  .person .av { width: 44px; height: 44px; border-radius: 50%; background: var(--text); color: var(--panel); display: grid; place-items: center; font-weight: 700; }
+  .person .nm { font-size: 20px; font-weight: 650; } .person .meta { color: var(--muted); }
+  .person a { margin-left: auto; color: var(--low); text-decoration: none; font-weight: 600; }
+  [hidden] { display: none !important; }
   @media (max-width: 1000px) {
     .kpis { grid-template-columns: repeat(2, 1fr); }
     .span8, .span4 { grid-column: 1 / -1; }
@@ -73,17 +101,53 @@
 <body>
 <header>
   <h1>Site Safety · Hazard Monitor <small>Hat Detect on QNX · Tiger Cloud</small></h1>
+  <nav class="tabs"><a href="#" id="tab-site">Site overview</a><a href="#" id="tab-worker">Worker</a></nav>
   <div class="controls">
     <div class="seg" id="range">
       <button data-r="1h">1 h</button><button data-r="8h">Shift (8 h)</button>
       <button data-r="24h">24 h</button><button data-r="7d">7 days</button>
     </div>
-    <select id="device"><option value="">All hats</option></select>
+    <select id="device" hidden></select>
+    <label class="toggle" title="Show simulated workers (proof of concept for a full site)">
+      <input type="checkbox" id="sim"> Simulated crew</label>
     <span class="live"><span class="dot" id="dot"></span><span id="updated">connecting…</span></span>
   </div>
 </header>
-<main>
+
+<main id="site">
+  <div class="banner" id="banner-site"></div>
+  <div class="note" id="simnote" hidden></div>
+  <section class="kpis">
+    <div class="card kpi"><h2>Workers</h2><div class="v" id="o-workers">–</div><div class="s" id="o-workers-s"></div></div>
+    <div class="card kpi"><h2>Alerts to wearers</h2><div class="v" id="o-alerts">–</div><div class="s" id="o-alerts-s"></div></div>
+    <div class="card kpi alarm"><h2>High-severity alerts</h2><div class="v" id="o-high">–</div><div class="s">alarms, sirens, impacts, horn + vehicle</div></div>
+    <div class="card kpi"><h2>Workers with high alerts</h2><div class="v" id="o-risk">–</div><div class="s" id="o-risk-s"></div></div>
+    <div class="card kpi"><h2>Stored in Tiger</h2><div class="v" id="o-rows">–</div><div class="s" id="o-rows-s"></div></div>
+  </section>
+
+  <section class="card span8">
+    <h2>Site alerts over time, by severity</h2>
+    <div class="chart"><canvas id="o-timeline"></canvas></div>
+  </section>
+  <section class="card span4">
+    <h2>Alerts by site zone</h2>
+    <div id="o-zones"></div>
+  </section>
+
+  <section class="card span12">
+    <div class="cardhead"><h2>Workers · highest risk first · click a worker to see their data</h2>
+      <input class="search" id="o-search" type="search" placeholder="Find a worker, role or zone"></div>
+    <div class="tablewrap"><table class="workers">
+      <thead><tr><th>Worker</th><th>Zone</th><th>Alerts over time</th><th class="num">Alerts</th><th class="num">High</th>
+        <th>Risk</th><th>Top hazard</th><th>Last alert</th></tr></thead>
+      <tbody id="o-workers-t"></tbody>
+    </table></div>
+  </section>
+</main>
+
+<main id="worker" hidden>
   <div class="banner" id="banner"></div>
+  <section class="card person" id="person"></section>
   <section class="kpis">
     <div class="card kpi"><h2>Detections</h2><div class="v" id="k-det">–</div><div class="s" id="k-det-s"></div></div>
     <div class="card kpi"><h2>Alerts to wearers</h2><div class="v" id="k-alerts">–</div><div class="s">after 3 s cooldown</div></div>
@@ -125,10 +189,11 @@
 const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const SEV = ["high", "medium", "low"];
 const NAMES = { COMBINED: "Horn + vehicle", ALARM: "Alarm", SIREN: "Siren", IMPACT: "Impact / crash", FIRE: "Fire",
-                HORN: "Horn", VOICE: "Shouting", VEHICLE: "Vehicle", SHARP: "Sharp object", PERSON: "Person" };
+                HORN: "Horn", VOICE: "Shouting", VEHICLE: "Vehicle", SHARP: "Sharp object", PERSON: "Person",
+                PERSON_DOWN: "Person down", PERSON_CLOSE: "Person close behind" };
 const name = h => NAMES[h] || h;
-let state = { range: localGet("range") || "8h", device: localGet("device") || "" };
-let charts = {}, lastOk = 0;
+let state = { range: localGet("range") || "8h", device: "", sim: localGet("sim") === "1", view: "site" };
+let charts = {}, lastOk = 0, site = null, loading = 0;
 
 function localGet(k) { try { return localStorage.getItem("hd-" + k); } catch { return null; } }
 function localSet(k, v) { try { localStorage.setItem("hd-" + k, v); } catch {} }
@@ -149,7 +214,92 @@ document.querySelectorAll("#range button").forEach(b => {
   b.onclick = () => { state.range = b.dataset.r; localSet("range", state.range);
     document.querySelectorAll("#range button").forEach(x => x.classList.toggle("on", x === b)); load(); };
 });
-document.getElementById("device").onchange = e => { state.device = e.target.value; localSet("device", state.device); load(); };
+document.getElementById("device").onchange = e => { location.hash = "#worker/" + encodeURIComponent(e.target.value); };
+const simBox = document.getElementById("sim");
+simBox.checked = state.sim;
+simBox.onchange = () => { state.sim = simBox.checked; localSet("sim", state.sim ? "1" : "0");
+  if (!state.sim && state.device.startsWith("sim-")) location.hash = "#"; else load(); };
+document.getElementById("o-search").oninput = () => site && renderWorkers(site);
+document.getElementById("tab-worker").onclick = e => { e.preventDefault();
+  location.hash = "#worker/" + encodeURIComponent(state.device || localGet("device") || "hat-01"); };
+
+function route() {
+  const m = location.hash.match(/^#worker\/(.*)$/);
+  state.view = m ? "worker" : "site";
+  if (m) { state.device = decodeURIComponent(m[1]); localSet("device", state.device); }
+  document.getElementById("site").hidden = state.view !== "site";
+  document.getElementById("worker").hidden = state.view !== "worker";
+  document.getElementById("device").hidden = state.view !== "worker";
+  document.getElementById("tab-site").classList.toggle("on", state.view === "site");
+  document.getElementById("tab-worker").classList.toggle("on", state.view === "worker");
+  window.scrollTo(0, 0);
+  load();
+}
+window.addEventListener("hashchange", route);
+
+function spark(values, color) {
+  const w = 120, h = 26, n = values.length, max = Math.max(1, ...values);
+  if (!n) return "";
+  const bw = w / n;
+  return `<svg class="spark" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" aria-hidden="true">` +
+    values.map((v, i) => v ? `<rect x="${(i * bw + 0.5).toFixed(1)}" y="${(h - (v / max) * h).toFixed(1)}"
+      width="${Math.max(1, bw - 1).toFixed(1)}" height="${((v / max) * h).toFixed(1)}" fill="${color}" rx="1"/>` : "").join("") + "</svg>";
+}
+
+function renderSite(d) {
+  site = d;
+  const k = d.kpis, live = d.workers.filter(w => !w.simulated).length, sims = d.workers.length - live;
+  document.getElementById("o-workers").textContent = k.workers;
+  document.getElementById("o-workers-s").textContent = `${k.active} reporting in the last 10 min` + (sims ? ` · ${live} live hat${live === 1 ? "" : "s"}, ${sims} simulated` : "");
+  document.getElementById("o-alerts").textContent = k.alerts.toLocaleString();
+  document.getElementById("o-alerts-s").textContent = `from ${k.detections.toLocaleString()} detections`;
+  document.getElementById("o-high").textContent = k.high_alerts.toLocaleString();
+  document.getElementById("o-risk").textContent = k.at_risk;
+  document.getElementById("o-risk-s").textContent = `of ${k.workers} worker${k.workers === 1 ? "" : "s"} this period`;
+  document.getElementById("o-rows").textContent = k.total_rows.toLocaleString();
+  document.getElementById("o-rows-s").textContent = `detections in the hypertable · this view took ${k.query_ms} ms`;
+  const note = document.getElementById("simnote");
+  note.hidden = !sims;
+  note.innerHTML = `<b>Proof of concept:</b> ${sims} simulated workers are shown alongside the live hat to illustrate a full site. ` +
+    `Only workers marked <span class="badge live">LIVE</span> are real hats. Turn off “Simulated crew” to see real data only.`;
+
+  chart("o-timeline", { type: "bar",
+    data: { labels: d.timeline.labels, datasets: SEV.map(s => ({ label: s[0].toUpperCase() + s.slice(1),
+      data: d.timeline.series[s] || [], backgroundColor: css("--" + s), borderRadius: 3, maxBarThickness: 28 })) },
+    options: { maintainAspectRatio: false, animation: false, scales: axes(true, false),
+      plugins: { legend: { position: "bottom", labels: { color: css("--muted"), boxWidth: 12 } } } } });
+
+  const zmax = Math.max(1, ...d.zones.map(z => z.high + z.medium + z.low));
+  document.getElementById("o-zones").innerHTML = d.zones.length ? d.zones.map(z => {
+    const t = z.high + z.medium + z.low;
+    return `<div class="zrow"><div class="nm" title="${esc(z.zone)}">${esc(z.zone)}</div>
+      <div class="riskbar" style="width:${Math.max(4, t / zmax * 100)}%">${SEV.map(s => z[s] ? `<i style="width:${z[s] / t * 100}%;background:var(--${s})"></i>` : "").join("")}</div>
+      <div class="ct">${t.toLocaleString()}</div></div>`; }).join("") : `<div class="empty">No alerts in this period</div>`;
+  renderWorkers(d);
+}
+
+function renderWorkers(d) {
+  const q = document.getElementById("o-search").value.trim().toLowerCase();
+  const rows = d.workers.filter(w => !q || [w.name, w.id, w.role, w.zone].some(x => String(x).toLowerCase().includes(q)));
+  const rmax = Math.max(1, ...d.workers.map(w => w.risk));
+  document.getElementById("o-workers-t").innerHTML = rows.length ? rows.map(w => {
+    const t = w.high + w.medium + w.low;
+    const sevTop = w.high ? "high" : w.medium ? "medium" : "low";
+    return `<tr data-id="${esc(w.id)}" class="${w.alerts ? "" : "quiet"}">
+      <td class="who"><b><span class="status ${w.active ? "on" : ""}" title="${w.active ? "reporting now" : "last seen " + ago(w.last_seen)}"></span>${esc(w.name)}${w.simulated ? '<span class="badge sim">SIM</span>' : '<span class="badge live">LIVE</span>'}</b>
+        <span>${esc(w.role)} · ${esc(w.id)}</span></td>
+      <td>${esc(w.zone)}</td>
+      <td>${spark(w.spark, css("--" + sevTop))}</td>
+      <td class="num">${w.alerts.toLocaleString()}</td><td class="num">${w.high.toLocaleString()}</td>
+      <td title="risk score ${w.risk} = 5×high + 2×medium + 1×low alerts"><div class="riskbar" style="width:${Math.max(3, w.risk / rmax * 100)}%">${t ? SEV.map(s => w[s] ? `<i style="width:${w[s] / t * 100}%;background:var(--${s})"></i>` : "").join("") : ""}</div></td>
+      <td>${w.top_hazard ? esc(name(w.top_hazard)) : "–"}</td>
+      <td style="white-space:nowrap">${w.last_alert ? `${sevPill(w.last_alert.severity)} ${esc(name(w.last_alert.hazard))}<br><span style="color:var(--muted);font-size:12px">${ago(w.last_alert.time)}</span>` : "–"}</td></tr>`;
+  }).join("") : `<tr><td colspan="8" class="empty">No workers match</td></tr>`;
+}
+document.getElementById("o-workers-t").onclick = e => {
+  const tr = e.target.closest("tr[data-id]");
+  if (tr) location.hash = "#worker/" + encodeURIComponent(tr.dataset.id);
+};
 
 function chart(id, cfg) {
   if (charts[id]) { charts[id].data = cfg.data; charts[id].update("none"); return; }
@@ -173,11 +323,18 @@ function render(d) {
   document.getElementById("k-last-s").textContent = k.last_alert ? `${ago(k.last_alert.time)} · ${k.last_alert.device}` : "no alerts in this period";
 
   const sel = document.getElementById("device");
-  const opts = [""].concat(d.devices.map(x => x.id));
-  if (sel.options.length !== opts.length || opts.some((o, i) => sel.options[i].value !== o)) {
-    sel.innerHTML = opts.map(o => `<option value="${esc(o)}">${o ? esc(o) : "All hats"}</option>`).join("");
-  }
+  const opts = d.devices.map(x => [x.id, `${x.name}${x.name !== x.id ? " · " + x.id : ""}`]);
+  if (state.device && !opts.some(o => o[0] === state.device)) opts.unshift([state.device, state.device]);
+  const html = opts.map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join("");
+  if (sel.dataset.html !== html) { sel.innerHTML = html; sel.dataset.html = html; }
   sel.value = state.device;
+
+  const w = d.worker || { name: state.device, role: "", zone: "", simulated: false };
+  const initials = String(w.name).split(/\s+/).map(x => x[0] || "").join("").slice(0, 2).toUpperCase();
+  document.getElementById("person").innerHTML = `<div class="av">${esc(initials)}</div>
+    <div><div class="nm">${esc(w.name)}${w.simulated ? '<span class="badge sim">SIMULATED</span>' : '<span class="badge live">LIVE HAT</span>'}</div>
+      <div class="meta">${esc(w.role)} · ${esc(w.zone)} · hat ${esc(w.id || state.device)}</div></div>
+    <a href="#">← All workers</a>`;
 
   chart("timeline", { type: "bar",
     data: { labels: d.timeline.labels, datasets: SEV.map(s => ({ label: s[0].toUpperCase() + s.slice(1),
@@ -225,12 +382,18 @@ function render(d) {
 }
 
 async function load() {
-  const dot = document.getElementById("dot"), upd = document.getElementById("updated"), banner = document.getElementById("banner");
+  const dot = document.getElementById("dot"), upd = document.getElementById("updated");
+  const view = state.view, banner = document.getElementById(view === "site" ? "banner-site" : "banner");
+  const my = ++loading;
   try {
-    const res = await fetch(`/api/data?range=${state.range}&device=${encodeURIComponent(state.device)}`);
+    const sim = state.sim ? 1 : 0;
+    const url = view === "site" ? `/api/overview?range=${state.range}&sim=${sim}`
+      : `/api/data?range=${state.range}&sim=${sim}&device=${encodeURIComponent(state.device)}`;
+    const res = await fetch(url);
     const d = await res.json();
     if (!res.ok) throw new Error(d.error || res.statusText);
-    render(d);
+    if (my !== loading || view !== state.view) return;   // a newer request superseded this one
+    view === "site" ? renderSite(d) : render(d);
     lastOk = Date.now();
     dot.className = "dot"; upd.textContent = "live · updated " + clock(d.now);
     banner.style.display = "none";
@@ -239,7 +402,7 @@ async function load() {
     banner.textContent = "Dashboard can't load data: " + e.message; banner.style.display = "block";
   }
 }
-load();
+route();
 setInterval(load, 5000);
 setInterval(() => { if (lastOk && Date.now() - lastOk > 15000) document.getElementById("dot").className = "dot stale"; }, 2000);
 </script>

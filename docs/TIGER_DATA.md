@@ -68,5 +68,30 @@ and hat. Panels:
 - Recent alerts, each with its recommended control.
 - The hazard register.
 
-To try it before the hat is running: `python scripts/tiger_bridge.py demo` adds 8 hours
-of sample data as device `demo-01`; `purge-demo` removes it.
+By default it shows only real detections recorded by the hat on the Pi.
+
+### Site overview and per-worker view
+
+The **Site overview** tab lists every worker (from the `workers` table: who wears each hat,
+their role and site zone). Workers are ranked by risk (5 × high + 2 × medium + 1 × low
+alerts). Each row has a sparkline, and there are site-wide alerts over time and alerts by
+zone. Click a worker to open the **Worker** tab: the full dashboard above, for that hat
+only. Counts come from the `detections_per_minute` rollup, so the overview stays fast as
+hats and history grow. The "Stored in Tiger" card shows the row count and how long the
+view took.
+
+Register a new hat: `INSERT INTO workers (device_id, name, role, zone) VALUES ('hat-02', 'Name', 'Role', 'Zone');`
+A hat that reports before it's registered still appears, by its device_id.
+
+### Simulated crew (proof of concept for scale)
+
+There is only one real hat, so a simulated crew shows what a full site looks like:
+
+```powershell
+python scripts/sim_crew.py add                    # 12 workers, last 8 h (device ids sim-01...)
+python scripts/sim_crew.py add --workers 40 --live  # more workers, keep adding detections live
+python scripts/sim_crew.py remove                 # delete all simulated workers and data
+```
+
+Simulated workers only appear when the dashboard's **Simulated crew** switch is on. They're
+badged SIM; the real hat is badged LIVE.

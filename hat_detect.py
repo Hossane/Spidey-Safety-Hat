@@ -12,6 +12,11 @@
   `EVENT {json}` lines on stdout and appended to a JSONL log.
 - An alert fires when an event's group is out of its cooldown (default 3 s). A horn or
   siren heard within 2 s of a vehicle seen becomes one COMBINED alert.
+- People and vehicles are tracked (tracking.py): each one alerts once when first seen,
+  not on every frame. Someone who steps out of view and comes back is recognised by
+  their clothing colours and stays quiet. They alert again only if something happens:
+  PERSON_DOWN (fell or collapsed), PERSON_CLOSE (right behind you, or closing in fast),
+  or a vehicle closing in. Settings: video.tracking in hat_config.json.
 - Alerts pulse a buzzer/LED/vibration motor on a GPIO pin (default BCM 18).
 
 Run on the Pi:     python3 hat_detect.py --no-audio                (camera + GPIO only)
@@ -31,6 +36,7 @@ from datetime import datetime, timezone
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import audio_detect  # noqa: E402
+import tracking  # noqa: E402
 import vision_detect  # noqa: E402
 
 DEFAULTS = {
@@ -38,11 +44,13 @@ DEFAULTS = {
     "audio": {"threshold": 0.3, "hop_seconds": 0.5,
               "alert_groups": ["ALARM", "SIREN", "HORN", "VOICE", "IMPACT", "FIRE"]},
     "video": {"camera_unit": 5, "fps": 5, "threshold": 0.5,
-              "alert_groups": ["PERSON", "VEHICLE", "SHARP"]},
+              "alert_groups": ["PERSON", "VEHICLE", "SHARP"],
+              "tracking": {"enabled": True, "groups": ["PERSON", "VEHICLE"]}},
     "alerts": {"cooldown_seconds": 3.0, "combine_window_seconds": 2.0,
                "severity": {"COMBINED": "high", "ALARM": "high", "SIREN": "high", "IMPACT": "high",
-                            "FIRE": "high", "HORN": "medium", "VOICE": "medium", "VEHICLE": "medium",
-                            "SHARP": "medium", "PERSON": "low"}},
+                            "FIRE": "high", "PERSON_DOWN": "high", "HORN": "medium", "VOICE": "medium",
+                            "VEHICLE": "medium", "SHARP": "medium", "PERSON_CLOSE": "medium",
+                            "PERSON": "low"}},
     "gpio": {"enabled": True, "pin_bcm": 18, "buzzer": "active", "tone_hz": 2700},
     "event_log": "~/hatdetect/events.jsonl",
 }
@@ -159,13 +167,18 @@ class AlertLogic:
             ev["alerted"] = True
             self.buzzer.beep(self.sev.get(group, "low"))
 
-    def handle(self, source, group, label, score, position=None, bbox=None):
+    def handle(self, source, group, label, score, position=None, bbox=None, alert=True, extra=None):
+        """alert=False logs the event without alerting (e.g. a person who is already being
+        tracked); alerts are still limited to one per group per cooldown."""
         t = time.monotonic()
         ev = {"time": now_iso(), "device_id": self.cfg["device_id"], "source": source,
               "label": label, "score": round(float(score), 3), "position": position,
               "bbox": bbox, "alerted": False, "group": group}
+        if extra:
+            ev.update(extra)
         with self.lock:
-            self._maybe_alert(group, ev, t)
+            if alert:
+                self._maybe_alert(group, ev, t)
             self.recent[group] = (t, ev)
             self._emit(ev)
             self._combine(source, group, t)
@@ -218,14 +231,37 @@ def video_worker(cfg, logic, stop, model_dir):
     det = vision_detect.Detector(model_dir)
     vc = cfg["video"]
     groups = set(vc["alert_groups"])
+    tc = vc.get("tracking", {})
+    tracked = set(tc.get("groups", ["PERSON", "VEHICLE"])) if tc.get("enabled", True) else set()
+    tracker = tracking.Tracker.from_config(tc)
     for _, img in vision_detect.camera_frames(vc["camera_unit"], vc["fps"], stop=stop):
         STATS["frames"] += 1
+        t = time.monotonic()
+        width = img.shape[1]
+        dets = [d for d in det.detect(img, vc["threshold"]) if d[3] in groups]
+
+        # Tracked groups (people, vehicles) alert only when someone new appears or something
+        # happens to them (fall, right behind you, closing in fast), not on every frame.
+        visible, incidents = tracker.update([d for d in dets if d[3] in tracked], img, t)
+        STATS.update(tracker.counts())
+        done = set()
+        for kind, tr in incidents:
+            print(f"[track] {kind:<8} {tr.name} #{tr.id} ({tracking.side_of(tr.box, width)})", file=sys.stderr)
+            g = tracking.incident_group(kind, tr)
+            if g:
+                logic.handle("video", g, tr.name, tr.score, position_of(tr.box, width), list(tr.box),
+                             extra={"track": tr.id, "incident": kind})
+                done.add(tr.group)
+
+        # Everything else is logged as before (one event per group per frame); tracked groups
+        # never alert from here.
         best = {}
-        for name, score, box, group in det.detect(img, vc["threshold"]):
-            if group in groups and score > best.get(group, (None, 0))[1]:
+        for name, score, box, group in dets:
+            if score > best.get(group, (None, 0))[1]:
                 best[group] = (name, score, box)
         for g, (name, score, box) in best.items():
-            logic.handle("video", g, name, score, position_of(box, img.shape[1]), list(box))
+            if g not in done:
+                logic.handle("video", g, name, score, position_of(box, width), list(box), alert=g not in tracked)
 
 
 def main():
@@ -273,8 +309,9 @@ def main():
             time.sleep(0.2)
             if time.monotonic() >= next_status:
                 f, w = STATS["frames"] - last["frames"], STATS["windows"] - last["windows"]
-                print(f"[hat] status: video {f / STATUS_EVERY:.1f} fps, audio {w / STATUS_EVERY:.1f} windows/s",
-                      file=sys.stderr)
+                print(f"[hat] status: video {f / STATUS_EVERY:.1f} fps, audio {w / STATUS_EVERY:.1f} windows/s, "
+                      f"tracking {STATS.get('tracked', 0)} in view ({STATS.get('people', 0)} people), "
+                      f"{STATS.get('remembered', 0)} remembered", file=sys.stderr)
                 next_status, last = time.monotonic() + STATUS_EVERY, dict(STATS)
     finally:
         stop.set()

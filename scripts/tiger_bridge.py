@@ -13,19 +13,15 @@ Commands (run from the project root):
     python scripts/tiger_bridge.py check         # connection + row counts
     python scripts/tiger_bridge.py ingest-pi     # load the Pi's ~/hatdetect/events.jsonl (dedups)
     python scripts/tiger_bridge.py ingest FILE   # load a local events.jsonl
-    python scripts/tiger_bridge.py demo          # add sample data from device demo-01 (for the dashboard)
-    python scripts/tiger_bridge.py purge-demo    # remove the demo-01 sample data
 """
 import argparse
 import json
 import os
 import queue
-import random
 import subprocess
 import sys
 import threading
 import time
-from datetime import datetime, timedelta, timezone
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SPOOL = os.path.join(ROOT, ".tiger_spool.jsonl")
@@ -33,7 +29,7 @@ SCHEMA = os.path.join(ROOT, "db", "schema.sql")
 
 # Same severities as hat_config.json; used when an event doesn't carry one.
 SEVERITY = {"COMBINED": "high", "ALARM": "high", "SIREN": "high", "IMPACT": "high", "FIRE": "high",
-            "HORN": "medium", "VOICE": "medium", "VEHICLE": "medium", "SHARP": "medium", "PERSON": "low"}
+            "PERSON_DOWN": "high", "PERSON_CLOSE": "medium", "HORN": "medium", "VOICE": "medium", "VEHICLE": "medium", "SHARP": "medium", "PERSON": "low"}
 
 INSERT_SQL = """
 INSERT INTO detections (time, device_id, source, hazard, severity, label, score, position, bbox, alerted)
@@ -262,63 +258,6 @@ def cmd_ingest_pi(url, args):
     print(f"Read {len(events)} events from the Pi; {after - before} were new.")
 
 
-DEMO_DEVICE = "demo-01"
-DEMO_EVENTS = [  # (source, hazard, label, weight)
-    ("video", "PERSON", "person", 40), ("video", "VEHICLE", "truck", 12), ("video", "VEHICLE", "car", 10),
-    ("audio", "HORN", "Vehicle horn, car horn, honking", 8), ("audio", "ALARM", "Reversing beeps", 9),
-    ("audio", "VOICE", "Shout", 5), ("audio", "IMPACT", "Smash, crash", 2), ("audio", "SIREN", "Siren", 2),
-    ("audio", "ALARM", "Smoke detector, smoke alarm", 1), ("video", "SHARP", "knife", 1),
-]
-
-
-def cmd_demo(url, args):
-    """Sample shift data so the dashboard has something to show before the hat runs."""
-    # Like the real hat: each incident is a burst of detections (video ~5 fps, audio every
-    # 0.5 s); only the first one in a 3 s cooldown alerts the wearer.
-    now = datetime.now(timezone.utc).replace(microsecond=0)   # whole seconds: re-runs dedup
-    rng = random.Random(42)
-    events, weights = [], [e[3] for e in DEMO_EVENTS]
-    t = now - timedelta(hours=args.hours)
-    last_alert = {}
-
-    def add(t, src, hazard, label, pos, score):
-        alerted = (t - last_alert.get(hazard, t - timedelta(minutes=10))).total_seconds() >= 3
-        if alerted:
-            last_alert[hazard] = t
-        events.append({"time": t.isoformat(), "device_id": DEMO_DEVICE, "source": src, "group": hazard,
-                       "label": label, "score": round(score, 3), "position": pos,
-                       "bbox": [rng.randint(0, 300), rng.randint(0, 200), rng.randint(320, 640),
-                                rng.randint(240, 480)] if pos else None, "alerted": alerted})
-
-    while True:
-        t += timedelta(seconds=rng.expovariate(1 / 45))       # an incident every ~45 s
-        if t >= now:
-            break
-        src, hazard, label, _ = rng.choices(DEMO_EVENTS, weights)[0]
-        pos = rng.choice(["left", "centre", "right"]) if src == "video" else None
-        n, step = (rng.randint(3, 25), 0.2) if src == "video" else (rng.randint(1, 4), 0.5)
-        base = rng.uniform(0.5, 0.9)
-        for i in range(n):
-            add(t + timedelta(seconds=i * step), src, hazard, label, pos,
-                min(0.99, max(0.4, base + rng.uniform(-0.08, 0.08))))
-        if hazard == "HORN" and rng.random() < 0.4:          # horn + vehicle -> combined alert
-            side = rng.choice(["left", "right"])
-            add(t + timedelta(seconds=0.4), "video", "VEHICLE", "truck", side, rng.uniform(0.55, 0.85))
-            add(t + timedelta(seconds=0.5), "combined", "COMBINED", f"{label} + truck", side, 0.6)
-    with connect(url) as conn:
-        n = insert_events(conn, events)
-    print(f"Added {n} sample detections for {DEMO_DEVICE} over the last {args.hours} h.")
-
-
-def cmd_purge_demo(url, args):
-    with connect(url) as conn:
-        n = conn.execute("DELETE FROM detections WHERE device_id = %s", (DEMO_DEVICE,)).rowcount
-        conn.commit()
-    with connect(url, autocommit=True) as conn:   # drop the rolled-up minutes for the demo data too
-        conn.execute("CALL refresh_continuous_aggregate('detections_per_minute', NULL, NULL)")
-    print(f"Removed {n} demo detections.")
-
-
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -328,17 +267,13 @@ def main():
     p.add_argument("file")
     p = sub.add_parser("ingest-pi")
     p.add_argument("--host", default="qnxpi")
-    p = sub.add_parser("demo")
-    p.add_argument("--hours", type=float, default=8)
-    sub.add_parser("purge-demo")
     args = ap.parse_args()
 
     url = database_url()
     if not url:
         sys.exit("TIGER_DATABASE_URL is not set. Copy .env.example to .env and paste your Tiger Cloud "
                  "service's connection string.")
-    {"init": cmd_init, "check": cmd_check, "ingest": cmd_ingest, "ingest-pi": cmd_ingest_pi,
-     "demo": cmd_demo, "purge-demo": cmd_purge_demo}[args.cmd](url, args)
+    {"init": cmd_init, "check": cmd_check, "ingest": cmd_ingest, "ingest-pi": cmd_ingest_pi}[args.cmd](url, args)
 
 
 if __name__ == "__main__":

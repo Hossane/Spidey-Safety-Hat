@@ -22,6 +22,10 @@ INSERT INTO hazard_types (hazard, source, severity, description, control) VALUES
                                      'Check for falling objects or injured workers; secure the area'),
   ('FIRE',     'audio',    'high',   'Fire or crackling sounds',
                                      'Raise the fire alarm; evacuate and use an extinguisher only if trained'),
+  ('PERSON_DOWN', 'video', 'high',   'A tracked person fell or collapsed (upright shape turned wide)',
+                                     'Go to them; check for injury and call first aid'),
+  ('PERSON_CLOSE', 'video', 'medium', 'A person right behind the wearer, or closing in fast',
+                                     'Check who is behind you before stepping back or turning'),
   ('HORN',     'audio',    'medium', 'Vehicle or air horn',
                                      'Look for moving plant or vehicles; stay in pedestrian zones'),
   ('VOICE',    'audio',    'medium', 'Shouting, screaming or a person in distress',
@@ -85,3 +89,19 @@ SELECT d.time, d.device_id, d.source, d.hazard, d.severity, d.label, d.score, d.
 FROM detections d
 LEFT JOIN hazard_types h USING (hazard)
 WHERE d.alerted;
+
+-- Who wears each hat. The dashboard's site overview lists every worker; click one to see
+-- their own hazards. A hat that reports before it is registered shows by its device_id.
+-- Simulated workers (device_id 'sim-…', from scripts/sim_crew.py) only show when the
+-- dashboard's "Simulated crew" switch is on.
+CREATE TABLE IF NOT EXISTS workers (
+    device_id  TEXT PRIMARY KEY,
+    name       TEXT NOT NULL,
+    role       TEXT NOT NULL DEFAULT 'Site worker',
+    zone       TEXT NOT NULL DEFAULT 'Unassigned',     -- site area they work in
+    simulated  BOOLEAN NOT NULL DEFAULT false
+);
+
+INSERT INTO workers (device_id, name, role, zone) VALUES
+  ('hat-01', 'Hat 01 wearer', 'Site worker', 'Test bay')
+ON CONFLICT (device_id) DO NOTHING;
