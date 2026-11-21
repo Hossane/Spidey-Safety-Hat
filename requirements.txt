@@ -1,0 +1,7 @@
+# Laptop-side tooling only: testing models, recording samples, checking thresholds.
+# Nothing here runs on the Pi; the Pi uses the C++ TensorFlow Lite library.
+tensorflow>=2.15        # includes tf.lite.Interpreter for running the .tflite models
+numpy>=1.26
+opencv-python>=4.9      # webcam frames and drawing boxes when testing the detector
+sounddevice>=0.4        # recording from the mic when testing YAMNet
+soundfile>=0.12         # reading and writing .wav test clips

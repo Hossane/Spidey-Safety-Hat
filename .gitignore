@@ -1,0 +1,18 @@
+# Models (download per models/README.md)
+models/*.tflite
+models/*.csv
+models/*.txt
+
+# Build output
+build/
+build-*/
+
+# Python
+__pycache__/
+.venv/
+venv/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
