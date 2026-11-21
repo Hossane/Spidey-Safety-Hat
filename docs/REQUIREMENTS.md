@@ -4,7 +4,9 @@ Hack Western 2026 · QNX track
 
 A wearable hat with a microphone and a camera that detects important sounds
 and objects around the wearer and alerts them. Detection runs entirely
-on-device: a Raspberry Pi running QNX, with TensorFlow Lite models.
+on-device: a Raspberry Pi running QNX, with TensorFlow Lite models. Every
+detection event is stored in **Tiger Data** (Tiger Cloud / TimescaleDB) for
+history, analytics and a live dashboard.
 
 > **Scope:** video and audio detection only. Anything else from the original
 > hat idea is out of scope for this build.
@@ -39,19 +41,32 @@ on-device: a Raspberry Pi running QNX, with TensorFlow Lite models.
 | FR-L2 | Alert the wearer when an audio or video event fires | Must |
 | FR-L3 | Combine audio and video events that happen within a short time window into one alert (e.g. "horn heard + car seen") | Should |
 | FR-L4 | Log every event with a timestamp, label and score to the console or a file for the demo | Should |
-| FR-L5 | Choose the alert output (vibration motor / buzzer / speaker / screen) — **team decision, see §6** | Must |
+| FR-L5 | Choose the alert output (vibration motor / buzzer / speaker / screen) — **team decision, see §7** | Must |
+
+### Event storage and dashboard (Tiger Data)
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| FR-D1 | Store every detection event (sound, object, combined alert) in a Tiger Cloud service | Must |
+| FR-D2 | Store events in a TimescaleDB **hypertable** partitioned on event time | Must |
+| FR-D3 | Send events from the Pi to a **bridge service** on the laptop (JSON over HTTP or UDP), which inserts them into Tiger Cloud — see §6 for why | Must |
+| FR-D4 | Buffer events on the Pi when the network is down and resend them when it's back | Should |
+| FR-D5 | Live dashboard showing recent events and counts per label over time (e.g. Grafana or a small web page reading Tiger Cloud) | Should |
+| FR-D6 | Use a **continuous aggregate** for per-minute counts by label so the dashboard stays fast | Should |
+| FR-D7 | Analytics queries for the demo: busiest times, most common sounds, how often audio and video agree | Could |
 
 ## 2. Non-functional requirements
 
 | ID | Requirement |
 |----|-------------|
-| NFR-1 | All inference runs on-device; no internet connection required |
+| NFR-1 | All inference and alerts run on-device and work with no internet; only event upload to Tiger Data needs a network |
 | NFR-2 | Audio detection latency ≤ 1.5 s from sound to alert |
 | NFR-3 | Video detection at ≥ 2 frames per second while audio is also running |
 | NFR-4 | Runs on battery power for at least the length of the demo (~30 min) |
 | NFR-5 | Wearable: board, mic and camera mounted on or near the hat, with a power bank in a pocket |
 | NFR-6 | Thresholds, target classes and cooldowns set in a config file, not hard-coded |
 | NFR-7 | Written in C++17, cross-compiled with the QNX SDP 8.0 toolchain |
+| NFR-8 | Database credentials kept in a `.env` file on the laptop, never committed and never stored on the Pi |
+| NFR-9 | An event reaches Tiger Cloud within 2 s of detection while the network is up |
 
 ## 3. Hardware
 
@@ -74,7 +89,9 @@ on-device: a Raspberry Pi running QNX, with TensorFlow Lite models.
 - CMake ≥ 3.16, git, a native GCC/Clang toolchain (needed to build `flatc`)
 - TensorFlow Lite cross-compiled for QNX aarch64le, from
   [qnx-ports/build-files](https://github.com/qnx-ports/build-files) (`ports/tensorflow`)
-- Python 3.10+ with `requirements.txt`, only for testing models on the laptop
+- Python 3.10+ with `requirements.txt`, for testing models and running the Tiger Data bridge
+- A Tiger Data account with one Tiger Cloud service (free plan, or the MLH hackathon credits)
+- `psql` (PostgreSQL client), for creating tables and checking data
 
 ### On the Pi (QNX)
 - `io-audio` running with the USB mic (QNX Sound Architecture / `libasound`)
@@ -96,16 +113,48 @@ default classes. Download them into `models/` (they are git-ignored); see
 YAMNet / COCO, train a small model in Edge Impulse or Teachable Machine and
 export it as `.tflite`. Budget ~50–100 samples per class.
 
-## 6. Open decisions (team)
+## 6. Tiger Data
+
+### Why a bridge service
+There is no official PostgreSQL client library (`libpq`) for QNX, so the Pi
+does not talk to the database directly. The Pi sends small JSON events over the
+local network to a bridge on the laptop. The bridge uses a normal Postgres
+driver (`psycopg`) to insert them into Tiger Cloud. This also keeps database
+credentials off the hat.
+
+```
+Pi (QNX) ──JSON over Wi-Fi──► bridge (laptop, Python) ──SQL/TLS──► Tiger Cloud
+                                                                     │
+                                                    dashboard ◄──────┘
+```
+
+### Data to store (`detections` hypertable)
+| Column | Type | Notes |
+|--------|------|-------|
+| `time` | timestamptz | When the event was detected (hypertable time column) |
+| `device_id` | text | Which hat, e.g. `hat-01` |
+| `source` | text | `audio`, `video` or `combined` |
+| `label` | text | e.g. `Siren`, `car`, `person` |
+| `score` | real | Model confidence, 0–1 |
+| `position` | text, nullable | `left` / `centre` / `right` for video events |
+| `bbox` | jsonb, nullable | Box coordinates for video events |
+| `alerted` | boolean | Whether the wearer was alerted (vs. below cooldown) |
+
+A continuous aggregate (`detections_per_minute`) holds counts per minute by
+`source` and `label` for the dashboard.
+
+## 7. Open decisions (team)
 
 - [ ] What exactly does the hat do, and who is it for? (accessibility for deaf / blind users, safety, other)
+- [ ] Bridge transport: HTTP POST or UDP
+- [ ] Dashboard: Grafana (connects to Postgres directly) or a custom web page
 - [ ] Final list of target sounds
 - [ ] Final list of target objects
 - [ ] Alert output: vibration, buzzer, spoken alert, or screen
 - [ ] Camera: USB webcam or Pi Camera Module 3
 - [ ] Pi 4 or Pi 5
 
-## 7. Before the hackathon (setup checklist)
+## 8. Before the hackathon (setup checklist)
 
 - [ ] QNX image flashed and the Pi boots; SSH works
 - [ ] QNX SDP installed on at least one laptop; `source ~/qnx800/qnxsdp-env.sh` works
@@ -113,3 +162,6 @@ export it as `.tflite`. Budget ~50–100 samples per class.
 - [ ] USB mic shows up under `/dev/snd` and a test recording plays back
 - [ ] Camera shows frames in `camera_example3_viewfinder`
 - [ ] Both models downloaded and tested on a laptop with `requirements.txt`
+- [ ] Tiger Data account created and one Tiger Cloud service running; connection string saved in `.env`
+- [ ] `psql` connects to the service from the laptop
+- [ ] Pi and laptop are on the same network and can reach each other (ping both ways)

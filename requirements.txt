@@ -1,5 +1,11 @@
-# Laptop-side tooling only: testing models, recording samples, checking thresholds.
+# Laptop-side only: testing models and running the Tiger Data bridge.
 # Nothing here runs on the Pi; the Pi uses the C++ TensorFlow Lite library.
+
+# --- Tiger Data bridge (Pi events -> Tiger Cloud) ---
+psycopg[binary]>=3.1    # Postgres driver for Tiger Cloud / TimescaleDB
+python-dotenv>=1.0      # loads the connection string from .env
+
+# --- Model testing ---
 tensorflow>=2.15        # includes tf.lite.Interpreter for running the .tflite models
 numpy>=1.26
 opencv-python>=4.9      # webcam frames and drawing boxes when testing the detector
