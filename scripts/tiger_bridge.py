@@ -1,19 +1,25 @@
-"""Tiger Data bridge for Hat Detect: puts every detection from the hat into Tiger Cloud.
+"""Tiger Data bridge for Hat Detect: stores the hat's unified hazard events in Tiger Cloud.
 
 The Pi (QNX) has no Postgres client and never holds the database password. Its events
 reach the laptop as `EVENT {json}` lines over SSH (scripts/laptop_companion.py), and this
-module inserts them into the `detections` hypertable. If Tiger Cloud is unreachable,
-events are kept in .tiger_spool.jsonl and sent when the connection comes back.
+module upserts them into the `detections` hypertable, one row per event_id: an event's
+open, update and closed records all land on the same row, and re-sending any of them is
+harmless (an older record never overwrites a newer one).
+
+Reliability: TigerWriter.add() never blocks the hat's alerts. If Tiger Cloud is
+unreachable, events are kept in .tiger_spool.jsonl and replayed when the connection comes
+back. A record the database rejects as invalid goes to .tiger_rejected.jsonl instead of
+blocking everything behind it.
 
 Setup: put the service's connection string in .env (see .env.example):
     TIGER_DATABASE_URL=postgres://tsdbadmin:<password>@<host>:<port>/tsdb?sslmode=require
 
 Commands (run from the project root):
-    python scripts/tiger_bridge.py init          # create tables, rollup, policies (safe to re-run)
+    python scripts/tiger_bridge.py init          # create/migrate tables, rollup, policies (safe to re-run)
     python scripts/tiger_bridge.py check         # connection + row counts
-    python scripts/tiger_bridge.py ingest-pi     # load the Pi's ~/hatdetect/events.jsonl (dedups)
+    python scripts/tiger_bridge.py ingest-pi     # load the Pi's ~/hatdetect/events.jsonl (no duplicates)
     python scripts/tiger_bridge.py ingest FILE   # load a local events.jsonl
-    python scripts/tiger_bridge.py demo          # add sample data from device demo-01 (for the dashboard)
+    python scripts/tiger_bridge.py demo          # replace the demo-01 sample data (for the dashboard)
     python scripts/tiger_bridge.py purge-demo    # remove the demo-01 sample data
 """
 import argparse
@@ -25,20 +31,31 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 from datetime import datetime, timedelta, timezone
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SPOOL = os.path.join(ROOT, ".tiger_spool.jsonl")
+REJECTS = os.path.join(ROOT, ".tiger_rejected.jsonl")
 SCHEMA = os.path.join(ROOT, "db", "schema.sql")
 
-# Same severities as hat_config.json; used when an event doesn't carry one.
-SEVERITY = {"COMBINED": "high", "ALARM": "high", "SIREN": "high", "IMPACT": "high", "FIRE": "high",
-            "HORN": "medium", "VOICE": "medium", "VEHICLE": "medium", "SHARP": "medium", "PERSON": "low"}
+FUSION_SOURCE = {"AUDIO_ONLY": "audio", "VISION_ONLY": "video", "MULTIMODAL": "combined"}
+STATUS_RANK = {"open": 0, "update": 1, "closed": 2}
+SEVERITIES = {"low", "medium", "high"}
 
-INSERT_SQL = """
-INSERT INTO detections (time, device_id, source, hazard, severity, label, score, position, bbox, alerted)
-VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-ON CONFLICT (device_id, source, label, time) DO NOTHING
+COLUMNS = ("time, device_id, source, hazard, severity, label, score, position, bbox, alerted, "
+           "event_id, fusion, status, last_time, audio_group, audio_label, audio_score, audio_count, "
+           "video_group, video_label, video_score, video_count, correlation_window, explanation")
+_UPDATED = [c.strip() for c in COLUMNS.split(",") if c.strip() not in ("time", "event_id", "device_id", "alerted")]
+_RANK_SQL = "(CASE {t}.status WHEN 'closed' THEN 2 WHEN 'update' THEN 1 ELSE 0 END)"
+INSERT_SQL = f"""
+INSERT INTO detections ({COLUMNS})
+VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s::uuid, %s, %s, %s,
+        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+ON CONFLICT (event_id, time) DO UPDATE SET
+    {", ".join(f"{c} = EXCLUDED.{c}" for c in _UPDATED)},
+    alerted = detections.alerted OR EXCLUDED.alerted
+WHERE {_RANK_SQL.format(t="detections")} <= {_RANK_SQL.format(t="EXCLUDED")}
 """
 
 
@@ -58,35 +75,111 @@ def connect(url, autocommit=False):
                            application_name="hatdetect-bridge")
 
 
+def is_event(ev):
+    """Unified event record (fusion.py), as opposed to a pre-fusion raw detection line."""
+    return isinstance(ev, dict) and "event_id" in ev
+
+
 def to_row(ev):
-    """Pi event dict -> detections row. Accepts the hat's `group` field as the hazard."""
-    from psycopg.types.json import Jsonb
-    hazard = ev.get("hazard") or ev.get("group") or "UNKNOWN"
-    bbox = ev.get("bbox")
-    return (ev["time"], ev.get("device_id", "hat-01"), ev["source"], hazard,
-            ev.get("severity") or SEVERITY.get(hazard, "low"), ev["label"], float(ev["score"]),
-            ev.get("position"), Jsonb(bbox) if bbox is not None else None, bool(ev.get("alerted")))
+    """Unified event record -> detections row. Raises ValueError if it is malformed."""
+    try:
+        fusion, status, severity = ev["fusion"], ev["status"], ev["severity"]
+        if fusion not in FUSION_SOURCE or status not in STATUS_RANK or severity not in SEVERITIES:
+            raise ValueError(f"bad fusion/status/severity {fusion!r}/{status!r}/{severity!r}")
+        a, v = ev.get("audio") or {}, ev.get("video") or {}
+        scores = [float(p["score"]) for p in (a, v) if p]
+        if not scores:
+            raise ValueError("event has neither an audio nor a video part")
+        corr = ev.get("correlation") or {}
+        bbox = v.get("bbox")
+        return (ev["time"], ev["device_id"], FUSION_SOURCE[fusion], ev["hazard"], severity, ev["label"],
+                max(scores), v.get("position"), json.dumps(bbox) if bbox is not None else None,
+                bool(ev.get("alerted")), str(uuid.UUID(ev["event_id"])), fusion, status, ev.get("last_time"),
+                a.get("group"), a.get("label"), a.get("score"), a.get("detections"),
+                v.get("group"), v.get("label"), v.get("score"), v.get("detections"),
+                corr.get("window_seconds"), corr.get("explanation"))
+    except (KeyError, TypeError, AttributeError) as e:
+        raise ValueError(f"malformed event: {type(e).__name__} {e}") from None
+
+
+def latest_per_event(events):
+    """Collapse a batch to one record per event_id: the most advanced status, latest wins ties."""
+    best = {}
+    for ev in events:
+        key = ev.get("event_id")
+        cur = best.get(key)
+        if cur is None or STATUS_RANK.get(ev.get("status"), -1) >= STATUS_RANK.get(cur.get("status"), -1):
+            best[key] = ev
+    return list(best.values())
+
+
+def is_offline(e):
+    """Connection problems (retry later) vs. data problems (reject the record)."""
+    if isinstance(e, (OSError, TimeoutError, ConnectionError)):
+        return True
+    try:
+        import psycopg
+    except ImportError:
+        return False
+    return isinstance(e, (psycopg.OperationalError, psycopg.InterfaceError))
 
 
 def insert_events(conn, events):
-    rows = [to_row(e) for e in events]
-    with conn.cursor() as cur:
-        cur.executemany(INSERT_SQL, rows)
-    conn.commit()
-    return len(rows)
+    """Upsert unified events. Returns (rows written, rejected [(event, reason)]).
+    Connection errors propagate (caller buffers and retries); invalid records are returned
+    as rejected and never block the rest of the batch."""
+    rows, rejected = [], []
+    for ev in latest_per_event(e for e in events if is_event(e)):
+        try:
+            rows.append((ev, to_row(ev)))
+        except ValueError as e:
+            rejected.append((ev, str(e)))
+    if not rows:
+        return 0, rejected
+    try:
+        with conn.cursor() as cur:
+            cur.executemany(INSERT_SQL, [r for _, r in rows])
+        conn.commit()
+        return len(rows), rejected
+    except Exception as e:  # noqa: BLE001
+        conn.rollback()
+        if is_offline(e):
+            raise
+    written = 0                      # the batch had a bad row: find it, keep the rest
+    for ev, row in rows:
+        try:
+            with conn.cursor() as cur:
+                cur.execute(INSERT_SQL, row)
+            conn.commit()
+            written += 1
+        except Exception as e:  # noqa: BLE001
+            conn.rollback()
+            if is_offline(e):
+                raise
+            rejected.append((ev, f"{type(e).__name__}: {str(e).splitlines()[0][:200]}"))
+    return written, rejected
+
+
+def write_rejects(rejected, path=REJECTS):
+    with open(path, "a") as f:
+        for ev, reason in rejected:
+            f.write(json.dumps({"reason": reason, "event": ev}) + "\n")
 
 
 class TigerWriter:
     """Background writer used by the laptop companion. add() never blocks or raises:
-    events are batched (up to 1 s) and inserted; on failure they go to the spool file
-    and are retried every 10 s."""
+    events are batched (up to 1 s) and upserted; if Tiger Cloud is unreachable they go to
+    the spool file, which is replayed (before newer events) once a retry connects."""
 
-    def __init__(self, url, log=print):
+    def __init__(self, url, log=print, connect_fn=None, spool=SPOOL, rejects=REJECTS, retry_seconds=10.0):
         self.url, self.log = url, log
+        self._connect = connect_fn or connect
+        self.spool_path, self.rejects_path, self.retry_seconds = spool, rejects, retry_seconds
         self.q = queue.Queue()
         self.conn = None
         self.sent = 0
         self.spooled = 0
+        self.rejected = 0
         self._inflight = []
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True)
@@ -97,22 +190,36 @@ class TigerWriter:
 
     def _ensure_conn(self):
         if self.conn is None or self.conn.closed:
-            self.conn = connect(self.url)
+            self.conn = self._connect(self.url)
             self.log("[tiger] connected to Tiger Cloud")
             self._replay_spool()
 
+    def _write(self, events):
+        n, bad = insert_events(self.conn, events)
+        if bad:
+            write_rejects(bad, self.rejects_path)
+            self.rejected += len(bad)
+            self.log(f"[tiger] rejected {len(bad)} invalid events ({bad[0][1]}); "
+                     f"kept in {os.path.basename(self.rejects_path)}")
+        return n
+
     def _replay_spool(self):
-        if not os.path.exists(SPOOL):
+        if not os.path.exists(self.spool_path):
             return
-        with open(SPOOL) as f:
-            events = [json.loads(line) for line in f if line.strip()]
+        with open(self.spool_path) as f:
+            events = []
+            for line in f:
+                try:
+                    events.append(json.loads(line))
+                except json.JSONDecodeError:
+                    pass
         if events:
-            n = insert_events(self.conn, events)
+            n = self._write(events)
             self.log(f"[tiger] sent {n} buffered events")
-        os.remove(SPOOL)
+        os.remove(self.spool_path)
 
     def _spool(self, batch):
-        with open(SPOOL, "a") as f:
+        with open(self.spool_path, "a") as f:
             for e in batch:
                 f.write(json.dumps(e) + "\n")
         self.spooled += len(batch)
@@ -130,34 +237,39 @@ class TigerWriter:
                     except queue.Empty:
                         break
             except queue.Empty:
-                continue
+                if self.conn is None and os.path.exists(self.spool_path) and time.monotonic() >= next_retry:
+                    batch = []           # idle with a backlog: try to reconnect and replay it
+                else:
+                    continue
             if time.monotonic() < next_retry:
                 self._spool(batch)
                 continue
             self._inflight = batch
             try:
                 self._ensure_conn()
-                self.sent += insert_events(self.conn, batch)
+                if batch:
+                    self.sent += self._write(batch)
                 self._inflight = []
-            except Exception as e:  # noqa: BLE001 - network/db errors: buffer and retry later
-                self.log(f"[tiger] offline ({type(e).__name__}: {str(e).splitlines()[0][:120]}); "
-                         "buffering events, retrying in 10 s")
+            except Exception as e:  # noqa: BLE001 - offline, or an unexpected bug: never lose events
+                self.log(f"[tiger] offline ({type(e).__name__}: {(str(e).splitlines() or [''])[0][:120]}); "
+                         f"buffering events, retrying in {self.retry_seconds:g} s")
                 self._inflight = []
-                self._spool(batch)
+                if batch:
+                    self._spool(batch)
                 try:
                     if self.conn:
                         self.conn.close()
                 except Exception:  # noqa: BLE001
                     pass
                 self.conn = None
-                next_retry = time.monotonic() + 10
+                next_retry = time.monotonic() + self.retry_seconds
 
     def close(self, timeout=10):
         self._stop.set()
         self._thread.join(timeout=timeout)
         if self._thread.is_alive():
             # Still stuck connecting: keep the in-flight batch and anything queued for next time.
-            # (If the insert does finish, re-sending them later is harmless: duplicates are skipped.)
+            # (If the insert does finish, re-sending them later is harmless: upserts by event_id.)
             left = list(self._inflight)
             while True:
                 try:
@@ -168,8 +280,9 @@ class TigerWriter:
                 self._spool(left)
         elif self.conn:
             self.conn.close()
-        self.log(f"[tiger] {self.sent} events stored" +
-                 (f", {self.spooled} buffered in {os.path.basename(SPOOL)}" if os.path.exists(SPOOL) else ""))
+        self.log(f"[tiger] {self.sent} event records stored" +
+                 (f", buffered in {os.path.basename(self.spool_path)}" if os.path.exists(self.spool_path) else "") +
+                 (f", {self.rejected} rejected" if self.rejected else ""))
 
 
 # ---------------------------------------------------------------- CLI commands
@@ -219,34 +332,62 @@ def cmd_check(url, args):
         if not exists:
             print("detections table missing: run `python scripts/tiger_bridge.py init`")
             return
-        rows = conn.execute("""SELECT device_id, count(*), count(*) FILTER (WHERE alerted), max(time)
-                               FROM detections GROUP BY device_id ORDER BY 4 DESC""").fetchall()
+        migrated = conn.execute("""SELECT count(*) FROM information_schema.columns
+                                   WHERE table_name = 'detections' AND column_name = 'event_id'""").fetchone()[0]
+        if not migrated:
+            print("detections table is the pre-fusion schema: run `python scripts/tiger_bridge.py init`")
+            return
+        rows = conn.execute("""SELECT device_id, count(*) FILTER (WHERE event_id IS NOT NULL),
+                                      count(*) FILTER (WHERE event_id IS NOT NULL AND fusion = 'MULTIMODAL'),
+                                      count(*) FILTER (WHERE event_id IS NOT NULL AND alerted),
+                                      count(*) FILTER (WHERE event_id IS NULL), max(time)
+                               FROM detections GROUP BY device_id ORDER BY 6 DESC""").fetchall()
         if not rows:
             print("detections: empty")
-        for d, n, a, last in rows:
-            print(f"  {d:<10} {n:>7} detections  {a:>6} alerts  last {last:%Y-%m-%d %H:%M:%S %Z}")
+        for d, n, m, a, legacy, last in rows:
+            print(f"  {d:<10} {n:>6} events ({m} multimodal, {a} alerted)  "
+                  f"{legacy:>6} pre-fusion rows  last {last:%Y-%m-%d %H:%M:%S %Z}")
 
 
 def read_jsonl(lines):
-    events = []
+    """Parse EVENT lines / JSONL. Returns (unified events, number of pre-fusion lines skipped)."""
+    events, legacy = [], 0
     for line in lines:
         line = line.strip()
         if line.startswith("EVENT "):
             line = line[6:]
-        if line:
-            try:
-                events.append(json.loads(line))
-            except json.JSONDecodeError:
-                pass
-    return events
+        if not line:
+            continue
+        try:
+            ev = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if is_event(ev):
+            events.append(ev)
+        else:
+            legacy += 1
+    return events, legacy
+
+
+def _ingest(url, events, legacy, what):
+    with connect(url) as conn:
+        before = conn.execute("SELECT count(*) FROM detections WHERE event_id IS NOT NULL").fetchone()[0]
+        n, bad = insert_events(conn, events)
+        after = conn.execute("SELECT count(*) FROM detections WHERE event_id IS NOT NULL").fetchone()[0]
+    if bad:
+        write_rejects(bad)
+    print(f"Read {len(events)} event records from {what}: {after - before} new events, "
+          f"{n} rows written (existing events updated, duplicates skipped).")
+    if legacy:
+        print(f"Skipped {legacy} pre-fusion raw detection lines (that format is no longer stored).")
+    if bad:
+        print(f"Rejected {len(bad)} invalid records -> {os.path.basename(REJECTS)} (first: {bad[0][1]})")
 
 
 def cmd_ingest(url, args):
     with open(args.file) as f:
-        events = read_jsonl(f)
-    with connect(url) as conn:
-        n = insert_events(conn, events)
-    print(f"Sent {n} events from {args.file} (duplicates skipped).")
+        events, legacy = read_jsonl(f)
+    _ingest(url, events, legacy, args.file)
 
 
 def cmd_ingest_pi(url, args):
@@ -254,60 +395,81 @@ def cmd_ingest_pi(url, args):
                          capture_output=True, text=True, timeout=60)
     if out.returncode != 0:
         sys.exit(f"Could not read events from the Pi: {out.stderr.strip()}")
-    events = read_jsonl(out.stdout.splitlines())
-    with connect(url) as conn:
-        before = conn.execute("SELECT count(*) FROM detections").fetchone()[0]
-        insert_events(conn, events)
-        after = conn.execute("SELECT count(*) FROM detections").fetchone()[0]
-    print(f"Read {len(events)} events from the Pi; {after - before} were new.")
+    events, legacy = read_jsonl(out.stdout.splitlines())
+    _ingest(url, events, legacy, "the Pi")
 
 
 DEMO_DEVICE = "demo-01"
-DEMO_EVENTS = [  # (source, hazard, label, weight)
-    ("video", "PERSON", "person", 40), ("video", "VEHICLE", "truck", 12), ("video", "VEHICLE", "car", 10),
-    ("audio", "HORN", "Vehicle horn, car horn, honking", 8), ("audio", "ALARM", "Reversing beeps", 9),
-    ("audio", "VOICE", "Shout", 5), ("audio", "IMPACT", "Smash, crash", 2), ("audio", "SIREN", "Siren", 2),
-    ("audio", "ALARM", "Smoke detector, smoke alarm", 1), ("video", "SHARP", "knife", 1),
+# (weight, [(kind, group, label, frames, step_s)...]) incidents on a site; multimodal ones
+# put the sound and the object close together so the real fusion rules combine them.
+DEMO_INCIDENTS = [
+    (30, [("video", "PERSON", "person", (3, 25), 0.2)]),
+    (10, [("video", "VEHICLE", "truck", (5, 30), 0.2)]),
+    (8, [("video", "VEHICLE", "car", (5, 20), 0.2)]),
+    (9, [("audio", "ALARM", "Reversing beeps", (2, 6), 0.5)]),
+    (5, [("audio", "HORN", "Vehicle horn, car horn, honking", (1, 3), 0.5)]),
+    (6, [("audio", "HORN", "Air horn, truck horn", (1, 3), 0.5), ("video", "VEHICLE", "truck", (5, 20), 0.2)]),
+    (2, [("audio", "SIREN", "Siren", (4, 10), 0.5), ("video", "VEHICLE", "car", (5, 15), 0.2)]),
+    (4, [("audio", "VOICE", "Shout", (1, 3), 0.5)]),
+    (2, [("audio", "VOICE", "Yell", (1, 2), 0.5), ("video", "PERSON", "person", (5, 15), 0.2)]),
+    (2, [("audio", "IMPACT", "Smash, crash", (1, 2), 0.5)]),
+    (1, [("audio", "IMPACT", "Bang", (1, 2), 0.5), ("video", "PERSON", "person", (5, 10), 0.2)]),
+    (1, [("audio", "ALARM", "Smoke detector, smoke alarm", (4, 10), 0.5)]),
+    (1, [("video", "SHARP", "knife", (2, 6), 0.2)]),
 ]
+
+
+def demo_events(hours, seed=42, now=None):
+    """Sample shift data made the way the hat makes it: simulated raw detections through
+    the real fusion engine (hat_config.json rules), so the events look like live ones."""
+    sys.path.insert(0, ROOT)
+    import fusion
+    with open(os.path.join(ROOT, "hat_config.json")) as f:
+        cfg = json.load(f)
+    engine = fusion.FusionEngine(cfg.get("fusion"), cfg["alerts"]["severity"], DEMO_DEVICE)
+    rng = random.Random(seed)
+    now = now or datetime.now(timezone.utc)
+    start = now - timedelta(hours=hours)
+    span = hours * 3600
+    detections, t = [], 0.0
+    weights = [w for w, _ in DEMO_INCIDENTS]
+    while True:
+        t += rng.expovariate(1 / 45)                          # an incident every ~45 s
+        if t >= span - 60:
+            break
+        _, parts = rng.choices(DEMO_INCIDENTS, weights)[0]
+        pos = rng.choice(["left", "centre", "right"])
+        for i, (kind, group, label, (lo, hi), step) in enumerate(parts):
+            base, offset = rng.uniform(0.5, 0.92), (rng.uniform(0, 1.2) if i else 0.0)
+            for k in range(rng.randint(lo, hi)):
+                ts = t + offset + k * step
+                score = min(0.99, max(0.35, base + rng.uniform(-0.06, 0.06)))
+                box = [rng.randint(0, 300), rng.randint(0, 200), rng.randint(320, 640), rng.randint(240, 480)]
+                detections.append(fusion.Detection(kind, group, label, round(score, 3), ts,
+                                                   (start + timedelta(seconds=ts)).isoformat(timespec="milliseconds"),
+                                                   pos if kind == "video" else None, box if kind == "video" else None))
+    detections.sort(key=lambda d: d.t)
+    records, i, tick = [], 0, 0.0
+    while i < len(detections):
+        while i < len(detections) and detections[i].t <= tick:
+            records += engine.add(detections[i])
+            i += 1
+        records += engine.tick(tick)
+        tick += 0.25
+    return records + engine.flush()
 
 
 def cmd_demo(url, args):
     """Sample shift data so the dashboard has something to show before the hat runs."""
-    # Like the real hat: each incident is a burst of detections (video ~5 fps, audio every
-    # 0.5 s); only the first one in a 3 s cooldown alerts the wearer.
-    now = datetime.now(timezone.utc).replace(microsecond=0)   # whole seconds: re-runs dedup
-    rng = random.Random(42)
-    events, weights = [], [e[3] for e in DEMO_EVENTS]
-    t = now - timedelta(hours=args.hours)
-    last_alert = {}
-
-    def add(t, src, hazard, label, pos, score):
-        alerted = (t - last_alert.get(hazard, t - timedelta(minutes=10))).total_seconds() >= 3
-        if alerted:
-            last_alert[hazard] = t
-        events.append({"time": t.isoformat(), "device_id": DEMO_DEVICE, "source": src, "group": hazard,
-                       "label": label, "score": round(score, 3), "position": pos,
-                       "bbox": [rng.randint(0, 300), rng.randint(0, 200), rng.randint(320, 640),
-                                rng.randint(240, 480)] if pos else None, "alerted": alerted})
-
-    while True:
-        t += timedelta(seconds=rng.expovariate(1 / 45))       # an incident every ~45 s
-        if t >= now:
-            break
-        src, hazard, label, _ = rng.choices(DEMO_EVENTS, weights)[0]
-        pos = rng.choice(["left", "centre", "right"]) if src == "video" else None
-        n, step = (rng.randint(3, 25), 0.2) if src == "video" else (rng.randint(1, 4), 0.5)
-        base = rng.uniform(0.5, 0.9)
-        for i in range(n):
-            add(t + timedelta(seconds=i * step), src, hazard, label, pos,
-                min(0.99, max(0.4, base + rng.uniform(-0.08, 0.08))))
-        if hazard == "HORN" and rng.random() < 0.4:          # horn + vehicle -> combined alert
-            side = rng.choice(["left", "right"])
-            add(t + timedelta(seconds=0.4), "video", "VEHICLE", "truck", side, rng.uniform(0.55, 0.85))
-            add(t + timedelta(seconds=0.5), "combined", "COMBINED", f"{label} + truck", side, 0.6)
+    records = demo_events(args.hours)
     with connect(url) as conn:
-        n = insert_events(conn, events)
-    print(f"Added {n} sample detections for {DEMO_DEVICE} over the last {args.hours} h.")
+        old = conn.execute("DELETE FROM detections WHERE device_id = %s", (DEMO_DEVICE,)).rowcount
+        conn.commit()
+        n, bad = insert_events(conn, records)
+    print(f"Added {n} sample events for {DEMO_DEVICE} over the last {args.hours:g} h"
+          + (f" (replaced {old} old demo rows)" if old else "") + ".")
+    if bad:
+        print(f"{len(bad)} sample events were rejected: {bad[0][1]}")
 
 
 def cmd_purge_demo(url, args):

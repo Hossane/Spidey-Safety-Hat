@@ -1,22 +1,25 @@
 """Hat Detect: the full on-device app. Runs on QNX (Raspberry Pi 5).
 
-    microphone audio ──► YAMNet ─────────┐
-                                         ├──► alert logic ──► GPIO buzz + EVENT lines
-    QNX Camera unit ──► EfficientDet ────┘                     (laptop speaks them on the JBL)
+    microphone audio ──► YAMNet ─────────┐   raw          fusion.py      unified
+                                         ├──► detections ──► FusionEngine ──► hazard events
+    QNX Camera unit ──► EfficientDet ────┘                                   │
+                                     GPIO buzz (once per event) ◄────────────┤
+                                     EVENT lines on stdout + events.jsonl ◄──┘
+                                     (the laptop speaks them on the JBL and stores them)
 
 - Audio and video run in separate threads; all inference is on the Pi (tflite_runtime).
 - Audio comes in as raw s16le 16 kHz mono PCM on stdin (the laptop streams its mic,
   because QNX's USB audio driver rejects the webcam mic). Use --no-audio to skip it.
-- Every detection becomes an event in the Tiger Data `detections` schema
-  (time, device_id, source, label, score, position, bbox, alerted). Events are printed as
-  `EVENT {json}` lines on stdout and appended to a JSONL log.
-- An alert fires when an event's group is out of its cooldown (default 3 s). A horn or
-  siren heard within 2 s of a vehicle seen becomes one COMBINED alert.
-- Alerts pulse a buzzer/LED/vibration motor on a GPIO pin (default BCM 18).
+- Raw detections go to fusion.FusionEngine, which groups them into hazard events
+  (AUDIO_ONLY, VISION_ONLY or MULTIMODAL, e.g. horn + vehicle -> VEHICLE_HAZARD). Each
+  event record is printed as an `EVENT {json}` line and appended to `event_log`; raw
+  detections are kept in `detection_log` for debugging.
+- The record with "notify": true is the one to announce: the buzzer pulses on a GPIO pin
+  (default BCM 18) and the laptop speaks it. The laptop never decides alerts on its own.
 
 Run on the Pi:     python3 hat_detect.py --no-audio                (camera + GPIO only)
 From the laptop:   python scripts/laptop_companion.py              (mic + speaker + this)
-Settings:          hat_config.json (thresholds, classes, cooldowns, GPIO pin)
+Settings:          hat_config.json (thresholds, classes, fusion rules, GPIO pin)
 """
 import argparse
 import json
@@ -26,12 +29,10 @@ import signal
 import sys
 import threading
 import time
-from datetime import datetime, timezone
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-import audio_detect  # noqa: E402
-import vision_detect  # noqa: E402
+import fusion  # noqa: E402   (stdlib only; the model modules are imported where used)
 
 DEFAULTS = {
     "device_id": "hat-01",
@@ -39,19 +40,18 @@ DEFAULTS = {
               "alert_groups": ["ALARM", "SIREN", "HORN", "VOICE", "IMPACT", "FIRE"]},
     "video": {"camera_unit": 5, "fps": 5, "threshold": 0.5,
               "alert_groups": ["PERSON", "VEHICLE", "SHARP"]},
-    "alerts": {"cooldown_seconds": 3.0, "combine_window_seconds": 2.0,
-               "severity": {"COMBINED": "high", "ALARM": "high", "SIREN": "high", "IMPACT": "high",
-                            "FIRE": "high", "HORN": "medium", "VOICE": "medium", "VEHICLE": "medium",
+    "alerts": {"severity": {"ALARM": "high", "SIREN": "high", "IMPACT": "high", "FIRE": "high",
+                            "HORN": "medium", "VOICE": "medium", "VEHICLE": "medium",
                             "SHARP": "medium", "PERSON": "low"}},
+    "fusion": fusion.DEFAULT_FUSION,
     "gpio": {"enabled": True, "pin_bcm": 18, "buzzer": "active", "tone_hz": 2700},
-    "event_log": "~/hatdetect/events.jsonl",
+    "event_log": "~/hatdetect/events.jsonl",           # unified hazard events
+    "detection_log": "~/hatdetect/detections.jsonl",   # raw model detections (null = off)
 }
 # Beep patterns per severity: list of (on_seconds, off_seconds)
 PATTERNS = {"high": [(0.12, 0.08)] * 3, "medium": [(0.15, 0.1)] * 2, "low": [(0.08, 0.0)]}
 STATS = {"frames": 0, "windows": 0}   # for the periodic status line
 STATUS_EVERY = 10.0
-COMBINE_AUDIO = {"HORN", "SIREN"}
-COMBINE_VIDEO = {"VEHICLE"}
 
 
 def load_config(path):
@@ -65,10 +65,6 @@ def load_config(path):
             else:
                 cfg[k] = v
     return cfg
-
-
-def now_iso():
-    return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
 
 
 class Buzzer:
@@ -128,65 +124,67 @@ class Buzzer:
                 pass
 
 
-class AlertLogic:
-    def __init__(self, cfg, buzzer, out):
-        self.cfg, self.buzzer, self.out = cfg, buzzer, out
-        self.cool = cfg["alerts"]["cooldown_seconds"]
-        self.window = cfg["alerts"]["combine_window_seconds"]
-        self.sev = cfg["alerts"]["severity"]
-        self.last_alert = {}            # group -> monotonic time of last alert
-        self.recent = {}                # group -> (monotonic time, event) for combining
-        self.lock = threading.Lock()
-        log = os.path.expanduser(cfg["event_log"])
-        os.makedirs(os.path.dirname(log), exist_ok=True)
-        self.log = open(log, "a", buffering=1)
+def open_log(path):
+    if not path:
+        return None
+    path = os.path.expanduser(path)
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    return open(path, "a", buffering=1)
+
+
+class EventPipeline:
+    """Raw detections -> FusionEngine -> unified hazard events.
+
+    Every event record is written as an `EVENT {json}` line to `out` (the laptop reads it
+    over SSH) and to the event log. A record with notify=true pulses the buzzer once, so
+    there is exactly one alert per event however many detections it took."""
+
+    def __init__(self, cfg, buzzer, out, clock=time.monotonic):
+        self.buzzer, self.out, self.clock = buzzer, out, clock
+        self.device_id = cfg["device_id"]
+        self.engine = fusion.FusionEngine(cfg["fusion"], cfg["alerts"]["severity"], self.device_id)
+        self.log = open_log(cfg.get("event_log"))
+        self.raw_log = open_log(cfg.get("detection_log"))
+        self.lock = threading.Lock()   # audio, video and main threads: keep records in order
         self.out_broken = False
 
-    def _emit(self, ev):
-        line = json.dumps(ev, separators=(",", ":"))
-        self.log.write(line + "\n")
-        if self.out_broken:
-            return
-        try:
-            self.out.write("EVENT " + line + "\n")
-            self.out.flush()
-        except (BrokenPipeError, OSError):   # laptop disconnected; main loop stops the app
-            self.out_broken = True
-
-    def _maybe_alert(self, group, ev, t):
-        if t - self.last_alert.get(group, -1e9) >= self.cool:
-            self.last_alert[group] = t
-            ev["alerted"] = True
-            self.buzzer.beep(self.sev.get(group, "low"))
-
     def handle(self, source, group, label, score, position=None, bbox=None):
-        t = time.monotonic()
-        ev = {"time": now_iso(), "device_id": self.cfg["device_id"], "source": source,
-              "label": label, "score": round(float(score), 3), "position": position,
-              "bbox": bbox, "alerted": False, "group": group}
+        d = fusion.Detection(source, group, label, round(float(score), 3), self.clock(),
+                             fusion.now_iso(), position, bbox)
         with self.lock:
-            self._maybe_alert(group, ev, t)
-            self.recent[group] = (t, ev)
-            self._emit(ev)
-            self._combine(source, group, t)
+            if self.raw_log:
+                self.raw_log.write(json.dumps(
+                    {"time": d.time, "device_id": self.device_id, "source": source, "group": group,
+                     "label": label, "score": d.score, "position": position, "bbox": bbox},
+                    separators=(",", ":")) + "\n")
+            self._emit(self.engine.add(d))
 
-    def _combine(self, source, group, t):
-        if source == "audio" and group in COMBINE_AUDIO:
-            others = COMBINE_VIDEO
-        elif source == "video" and group in COMBINE_VIDEO:
-            others = COMBINE_AUDIO
-        else:
-            return
-        for g in others:
-            seen = self.recent.get(g)
-            if seen and t - seen[0] <= self.window:
-                a, v = (self.recent[group][1], seen[1]) if source == "audio" else (seen[1], self.recent[group][1])
-                ev = {"time": now_iso(), "device_id": self.cfg["device_id"], "source": "combined",
-                      "label": f"{a['label']} + {v['label']}", "score": round(min(a["score"], v["score"]), 3),
-                      "position": v["position"], "bbox": v["bbox"], "alerted": False, "group": "COMBINED"}
-                self._maybe_alert("COMBINED", ev, t)
-                self._emit(ev)
-                return
+    def tick(self):
+        """Release events held for confirmation and close finished ones (call ~5x a second)."""
+        with self.lock:
+            self._emit(self.engine.tick(self.clock()))
+
+    def close(self):
+        with self.lock:
+            self._emit(self.engine.flush())
+            for f in (self.log, self.raw_log):
+                if f:
+                    f.close()
+
+    def _emit(self, records):
+        for r in records:
+            if r["notify"]:
+                self.buzzer.beep(r["severity"])
+            line = json.dumps(r, separators=(",", ":"))
+            if self.log:
+                self.log.write(line + "\n")
+            if self.out_broken:
+                continue
+            try:
+                self.out.write("EVENT " + line + "\n")
+                self.out.flush()
+            except (BrokenPipeError, OSError, ValueError):   # laptop disconnected
+                self.out_broken = True
 
 
 def position_of(box, width):
@@ -195,6 +193,7 @@ def position_of(box, width):
 
 
 def audio_worker(cfg, logic, stop, model_dir):
+    import audio_detect
     model = audio_detect.Yamnet(model_dir)
     groups = set(cfg["audio"]["alert_groups"])
     hop = int(cfg["audio"]["hop_seconds"] * audio_detect.SAMPLE_RATE)
@@ -215,6 +214,7 @@ def audio_worker(cfg, logic, stop, model_dir):
 
 
 def video_worker(cfg, logic, stop, model_dir):
+    import vision_detect
     det = vision_detect.Detector(model_dir)
     vc = cfg["video"]
     groups = set(vc["alert_groups"])
@@ -239,10 +239,12 @@ def main():
     args = ap.parse_args()
 
     cfg = load_config(args.config)
+    import audio_detect
+    import vision_detect
     model_dir = audio_detect.find_models(args.models) if not args.no_audio else vision_detect.find_models(args.models)
     stop = threading.Event()
     buzzer = Buzzer(cfg["gpio"])
-    logic = AlertLogic(cfg, buzzer, sys.stdout)
+    logic = EventPipeline(cfg, buzzer, sys.stdout)
 
     def on_signal(signum, frame):
         stop.set()
@@ -271,6 +273,7 @@ def main():
         next_status, last = time.monotonic() + STATUS_EVERY, dict(STATS)
         while not stop.is_set() and not logic.out_broken and any(w.is_alive() for w in workers):
             time.sleep(0.2)
+            logic.tick()
             if time.monotonic() >= next_status:
                 f, w = STATS["frames"] - last["frames"], STATS["windows"] - last["windows"]
                 print(f"[hat] status: video {f / STATUS_EVERY:.1f} fps, audio {w / STATUS_EVERY:.1f} windows/s",
@@ -280,6 +283,7 @@ def main():
         stop.set()
         for w in workers:          # video worker stops its recorder and deletes the file
             w.join(timeout=8)
+        logic.close()          # emit and close any events still open
         buzzer.close()
         print("[hat] stopped", file=sys.stderr)
 

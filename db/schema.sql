@@ -1,5 +1,6 @@
 -- Hat Detect: workplace-safety hazard log on Tiger Cloud (TimescaleDB).
--- Apply with:  python scripts/tiger_bridge.py init      (safe to run again)
+-- Apply with:  python scripts/tiger_bridge.py init      (safe to run again; it also
+-- migrates a database created by the earlier raw-detection schema)
 
 -- Hazard register: one row per hazard category the hat can identify, with the
 -- control the dashboard recommends. Severity matches the alert severity on the hat.
@@ -12,7 +13,11 @@ CREATE TABLE IF NOT EXISTS hazard_types (
 );
 
 INSERT INTO hazard_types (hazard, source, severity, description, control) VALUES
-  ('COMBINED', 'combined', 'high',   'Horn or siren heard while a vehicle is in view',
+  ('VEHICLE_HAZARD',  'combined', 'high', 'Horn or siren heard while a vehicle is in view',
+                                     'Stop and step clear of the vehicle path; make eye contact with the operator'),
+  ('WORKER_DISTRESS', 'combined', 'high', 'Shouting, screaming or a crash while a person is in view',
+                                     'Check on the worker; call for first aid and secure the area'),
+  ('COMBINED', 'combined', 'high',   'Horn or siren heard while a vehicle is in view (before fusion rules; now VEHICLE_HAZARD)',
                                      'Stop and step clear of the vehicle path; make eye contact with the operator'),
   ('ALARM',    'audio',    'high',   'Alarm, smoke detector, reversing beeper or buzzer',
                                      'Identify the alarm source; follow the evacuation or muster procedure'),
@@ -35,26 +40,66 @@ INSERT INTO hazard_types (hazard, source, severity, description, control) VALUES
 ON CONFLICT (hazard) DO UPDATE SET source = EXCLUDED.source, severity = EXCLUDED.severity,
   description = EXCLUDED.description, control = EXCLUDED.control;
 
--- Every detection from every hat. Hypertable partitioned on time.
+-- One row per unified hazard event (fusion.py on the hat), upserted on (event_id, time)
+-- as the event is opened, upgraded and closed. Hypertable partitioned on time.
+-- Rows written before fusion (one per raw model detection) have event_id NULL; the
+-- dashboard and the hazard_events view ignore them.
 CREATE TABLE IF NOT EXISTS detections (
-    time       TIMESTAMPTZ NOT NULL,         -- when the hat detected it
-    device_id  TEXT        NOT NULL,         -- which hat, e.g. hat-01
-    source     TEXT        NOT NULL CHECK (source IN ('audio', 'video', 'combined')),
-    hazard     TEXT        NOT NULL,         -- category (hazard_types.hazard)
-    severity   TEXT        NOT NULL,         -- high | medium | low
-    label      TEXT        NOT NULL,         -- model label, e.g. Siren, car, person
-    score      REAL        NOT NULL,         -- model confidence 0..1
-    position   TEXT,                         -- left | centre | right (video)
-    bbox       JSONB,                        -- [x0, y0, x1, y1] in pixels (video)
-    alerted    BOOLEAN     NOT NULL DEFAULT false  -- wearer was alerted (not in cooldown)
+    time        TIMESTAMPTZ NOT NULL,        -- when the event was first detected (fixed)
+    device_id   TEXT        NOT NULL,        -- which hat, e.g. hat-01
+    source      TEXT        NOT NULL CHECK (source IN ('audio', 'video', 'combined')),
+    hazard      TEXT        NOT NULL,        -- category (hazard_types.hazard)
+    severity    TEXT        NOT NULL,        -- high | medium | low
+    label       TEXT        NOT NULL,        -- e.g. "Siren + truck", "person"
+    score       REAL        NOT NULL,        -- strongest model confidence in the event, 0..1
+    position    TEXT,                        -- left | centre | right (video)
+    bbox        JSONB,                       -- [x0, y0, x1, y1] in pixels (video)
+    alerted     BOOLEAN     NOT NULL DEFAULT false,  -- the wearer was alerted
+    event_id    UUID,                        -- unified event id (NULL on pre-fusion rows)
+    fusion      TEXT,                        -- AUDIO_ONLY | VISION_ONLY | MULTIMODAL
+    status      TEXT,                        -- open | update | closed (latest record seen)
+    last_time   TIMESTAMPTZ,                 -- last detection that belonged to the event
+    audio_group TEXT,                        -- audio part: group, YAMNet class, peak score,
+    audio_label TEXT,                        --   number of raw detections merged
+    audio_score REAL,
+    audio_count INTEGER,
+    video_group TEXT,                        -- video part: group, COCO class, peak score,
+    video_label TEXT,                        --   number of raw detections merged
+    video_score REAL,
+    video_count INTEGER,
+    correlation_window REAL,                 -- multimodal: the rule's window, seconds
+    explanation TEXT                         -- multimodal: why the two were combined
 ) WITH (
     tsdb.hypertable,
     tsdb.segmentby = 'device_id',
     tsdb.orderby = 'time DESC'
 );
 
--- Lets the bridge re-send events (after a network drop, or from the Pi's log) without duplicates.
-CREATE UNIQUE INDEX IF NOT EXISTS detections_dedup ON detections (device_id, source, label, time);
+-- Migration from the raw-detection schema (no-ops on a fresh database). Plain nullable
+-- columns only: constraints can't be added to a hypertable with the columnstore on, so
+-- tiger_bridge.py validates fusion and status before inserting.
+ALTER TABLE detections ADD COLUMN IF NOT EXISTS event_id UUID;
+ALTER TABLE detections ADD COLUMN IF NOT EXISTS fusion TEXT;
+ALTER TABLE detections ADD COLUMN IF NOT EXISTS status TEXT;
+ALTER TABLE detections ADD COLUMN IF NOT EXISTS last_time TIMESTAMPTZ;
+ALTER TABLE detections ADD COLUMN IF NOT EXISTS audio_group TEXT;
+ALTER TABLE detections ADD COLUMN IF NOT EXISTS audio_label TEXT;
+ALTER TABLE detections ADD COLUMN IF NOT EXISTS audio_score REAL;
+ALTER TABLE detections ADD COLUMN IF NOT EXISTS audio_count INTEGER;
+ALTER TABLE detections ADD COLUMN IF NOT EXISTS video_group TEXT;
+ALTER TABLE detections ADD COLUMN IF NOT EXISTS video_label TEXT;
+ALTER TABLE detections ADD COLUMN IF NOT EXISTS video_score REAL;
+ALTER TABLE detections ADD COLUMN IF NOT EXISTS video_count INTEGER;
+ALTER TABLE detections ADD COLUMN IF NOT EXISTS correlation_window REAL;
+ALTER TABLE detections ADD COLUMN IF NOT EXISTS explanation TEXT;
+
+-- Idempotent ingestion: the bridge upserts on this, so re-sent events (after a network
+-- drop, or from the Pi's log) never duplicate. Hypertable unique indexes must include time.
+CREATE UNIQUE INDEX IF NOT EXISTS detections_event ON detections (event_id, time);
+-- The old dedup key now only applies to pre-fusion rows, so it can't reject an event.
+DROP INDEX IF EXISTS detections_dedup;
+CREATE UNIQUE INDEX IF NOT EXISTS detections_dedup_legacy ON detections (device_id, source, label, time)
+    WHERE event_id IS NULL;
 CREATE INDEX IF NOT EXISTS detections_hazard_time ON detections (hazard, time DESC);
 
 -- Per-minute counts for the dashboard. Real-time: includes rows not yet materialized.
@@ -75,7 +120,7 @@ SELECT add_continuous_aggregate_policy('detections_per_minute',
     schedule_interval => INTERVAL '1 minute',
     if_not_exists     => true);
 
--- Keep raw detections for 90 days; the per-minute rollup keeps the long-term trend.
+-- Keep events for 90 days; the per-minute rollup keeps the long-term trend.
 SELECT add_retention_policy('detections', INTERVAL '90 days', if_not_exists => true);
 
 -- Alerts only, joined with the hazard register (what the wearer was warned about, and what to do).
@@ -85,3 +130,14 @@ SELECT d.time, d.device_id, d.source, d.hazard, d.severity, d.label, d.score, d.
 FROM detections d
 LEFT JOIN hazard_types h USING (hazard)
 WHERE d.alerted;
+
+-- Unified hazard events with their recommended control: what the dashboard reads.
+CREATE OR REPLACE VIEW hazard_events AS
+SELECT d.event_id, d.time, d.last_time, d.device_id, d.hazard, d.severity, d.fusion, d.source,
+       d.label, d.score, d.audio_group, d.audio_label, d.audio_score, d.audio_count,
+       d.video_group, d.video_label, d.video_score, d.video_count, d.position, d.bbox,
+       d.correlation_window, d.explanation, d.alerted, d.status,
+       h.description, h.control
+FROM detections d
+LEFT JOIN hazard_types h USING (hazard)
+WHERE d.event_id IS NOT NULL;

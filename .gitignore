@@ -24,3 +24,5 @@ samples/
 .env
 # Bridge buffer when Tiger Cloud is unreachable
 .tiger_spool.jsonl
+# Events the database rejected as invalid (inspect, fix, re-ingest)
+.tiger_rejected.jsonl

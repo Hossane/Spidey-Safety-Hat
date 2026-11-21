@@ -7,132 +7,266 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <style>
   :root {
-    --bg: #f4f5f7; --panel: #ffffff; --text: #1d2330; --muted: #6b7385; --line: #e3e6ec;
-    --high: #d63c3c; --medium: #e29a1b; --low: #3b82c4; --ok: #2f9e66;
-    --high-bg: #fde9e9; --medium-bg: #fdf1dc; --low-bg: #e6f0fa;
+    color-scheme: light;
+    --page: #f9f9f7; --panel: #fcfcfb; --text: #0b0b0b; --text-2: #52514e; --muted: #898781;
+    --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11, 11, 11, .10); --wash: rgba(11, 11, 11, .04);
+    /* event type: fixed categorical slots (validated light + dark) */
+    --t-MULTIMODAL: #2a78d6; --t-AUDIO_ONLY: #eb6834; --t-VISION_ONLY: #1baf7a;
+    /* severity: status palette, always shown with an icon and a label */
+    --s-high: #d03b3b; --s-medium: #ec835a; --s-low: #fab219;
+    --ok: #0ca30c; --select: rgba(42, 120, 214, .10);
   }
   @media (prefers-color-scheme: dark) {
-    :root {
-      --bg: #12151b; --panel: #1b1f27; --text: #e8ebf1; --muted: #98a1b3; --line: #2c323d;
-      --high-bg: #3a1d1f; --medium-bg: #3a2d16; --low-bg: #172a3d;
+    :root:where(:not([data-theme="light"])) {
+      color-scheme: dark;
+      --page: #0d0d0d; --panel: #1a1a19; --text: #f0efec; --text-2: #c3c2b7; --muted: #898781;
+      --grid: #2c2c2a; --axis: #383835; --border: rgba(255, 255, 255, .10); --wash: rgba(255, 255, 255, .05);
+      --t-MULTIMODAL: #3987e5; --t-AUDIO_ONLY: #d95926; --t-VISION_ONLY: #199e70;
+      --select: rgba(57, 135, 229, .16);
     }
   }
-  * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--text);
-         font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
-  header { display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: center; justify-content: space-between;
-           padding: 16px 24px; background: var(--panel); border-bottom: 1px solid var(--line); }
-  h1 { font-size: 18px; margin: 0; letter-spacing: .2px; }
-  h1 small { color: var(--muted); font-weight: 400; margin-left: 8px; }
-  .controls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
-  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
-  .seg button { border: 0; background: transparent; color: var(--text); padding: 6px 12px; cursor: pointer; font: inherit; }
-  .seg button.on { background: var(--text); color: var(--panel); }
-  select { font: inherit; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--line);
-           background: var(--panel); color: var(--text); }
-  .live { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
-  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); }
-  .dot.stale { background: var(--medium); } .dot.err { background: var(--high); }
-  main { padding: 20px 24px 40px; display: grid; gap: 16px; grid-template-columns: repeat(12, 1fr); max-width: 1500px; margin: 0 auto; }
-  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; min-width: 0; }
-  .card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); margin: 0 0 12px; font-weight: 600; }
-  .kpis { grid-column: 1 / -1; display: grid; gap: 16px; grid-template-columns: repeat(5, 1fr); }
-  .kpi .v { font-size: 30px; font-weight: 650; line-height: 1.1; }
-  .kpi .s { color: var(--muted); font-size: 12px; margin-top: 4px; }
-  .kpi.alarm .v { color: var(--high); }
-  .span8 { grid-column: span 8; } .span4 { grid-column: span 4; } .span12 { grid-column: 1 / -1; }
-  .chart { position: relative; height: 260px; }
-  .zones { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 4px; }
-  .zone { border-radius: 10px; padding: 14px 8px; text-align: center; border: 1px solid var(--line); }
-  .zone .n { font-size: 26px; font-weight: 650; } .zone .l { color: var(--muted); font-size: 12px; }
-  .zone-break { margin-top: 12px; font-size: 12px; color: var(--muted); }
-  .wearer { text-align: center; color: var(--muted); font-size: 12px; margin-top: 8px; }
-  table { width: 100%; border-collapse: collapse; }
-  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
-  th { color: var(--muted); font-weight: 600; font-size: 12px; white-space: nowrap; }
-  td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
-  tr.quiet td { color: var(--muted); }
-  .sev { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; }
-  .sev.high { background: var(--high-bg); color: var(--high); }
-  .sev.medium { background: var(--medium-bg); color: var(--medium); }
-  .sev.low { background: var(--low-bg); color: var(--low); }
-  .feed { max-height: 420px; overflow: auto; }
-  .feed .item { display: grid; grid-template-columns: 70px 1fr; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--line); }
-  .feed .t { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
-  .feed .what { font-weight: 600; } .feed .ctl { color: var(--muted); font-size: 12px; }
-  .empty { color: var(--muted); padding: 20px 0; text-align: center; }
-  .banner { grid-column: 1 / -1; background: var(--high-bg); color: var(--high); border-radius: 10px; padding: 10px 14px; display: none; }
-  .tablewrap { overflow-x: auto; }
-  @media (max-width: 1000px) {
-    .kpis { grid-template-columns: repeat(2, 1fr); }
-    .span8, .span4 { grid-column: 1 / -1; }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --page: #0d0d0d; --panel: #1a1a19; --text: #f0efec; --text-2: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --axis: #383835; --border: rgba(255, 255, 255, .10); --wash: rgba(255, 255, 255, .05);
+    --t-MULTIMODAL: #3987e5; --t-AUDIO_ONLY: #d95926; --t-VISION_ONLY: #199e70;
+    --select: rgba(57, 135, 229, .16);
   }
-  @media (max-width: 600px) { header, main { padding-left: 16px; padding-right: 16px; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--page); color: var(--text);
+         font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  button, select, input { font: inherit; color: inherit; }
+  header { display: flex; flex-wrap: wrap; gap: 8px 20px; align-items: center; justify-content: space-between;
+           padding: 14px 24px; background: var(--panel); border-bottom: 1px solid var(--border); }
+  h1 { font-size: 17px; margin: 0; font-weight: 650; }
+  h1 small { color: var(--muted); font-weight: 400; margin-left: 8px; font-size: 13px; }
+  .live { display: inline-flex; align-items: center; gap: 6px; color: var(--text-2); font-size: 12px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); }
+  .dot.stale { background: var(--s-low); } .dot.err { background: var(--s-high); }
+
+  .filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 10px 24px;
+             background: var(--panel); border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 5; }
+  .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .seg button { border: 0; background: transparent; padding: 5px 11px; cursor: pointer; }
+  .seg button + button { border-left: 1px solid var(--border); }
+  .seg button.on { background: var(--text); color: var(--panel); }
+  select, input[type=datetime-local] { padding: 5px 8px; border-radius: 8px; border: 1px solid var(--border);
+           background: var(--panel); min-height: 32px; }
+  select.set { border-color: var(--t-MULTIMODAL); box-shadow: 0 0 0 1px var(--t-MULTIMODAL) inset; }
+  .custom { display: none; gap: 6px; align-items: center; color: var(--text-2); font-size: 12px; }
+  .custom.on { display: inline-flex; }
+  .linkbtn { border: 0; background: none; color: var(--text-2); text-decoration: underline; cursor: pointer; padding: 4px; }
+  .fcount { color: var(--text-2); font-size: 12px; margin-left: auto; }
+
+  main { padding: 18px 24px 40px; display: grid; gap: 16px; grid-template-columns: repeat(12, minmax(0, 1fr));
+         max-width: 1500px; margin: 0 auto; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px; min-width: 0; }
+  .card h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .6px; color: var(--text-2);
+             margin: 0 0 12px; font-weight: 600; display: flex; justify-content: space-between; gap: 8px; }
+  .card h2 .note { text-transform: none; letter-spacing: 0; font-weight: 400; color: var(--muted); }
+  .span8 { grid-column: span 8; } .span4 { grid-column: span 4; } .span12 { grid-column: 1 / -1; }
+  .banner { grid-column: 1 / -1; border: 1px solid var(--s-high); border-radius: 10px; padding: 10px 14px; display: none; }
+  .banner::before { content: "▲ "; color: var(--s-high); }
+
+  .kpis { grid-column: 1 / -1; display: grid; gap: 16px; grid-template-columns: repeat(5, minmax(0, 1fr)); }
+  .kpi { text-align: left; cursor: pointer; transition: border-color .15s; }
+  .kpi:hover { border-color: var(--axis); }
+  .kpi.on { box-shadow: 0 0 0 2px var(--t-MULTIMODAL) inset; }
+  .kpi h2 { margin-bottom: 6px; justify-content: flex-start; align-items: center; }
+  .kpi .v { font-size: 30px; font-weight: 650; line-height: 1.1; }
+  .kpi .s { color: var(--text-2); font-size: 12px; margin-top: 4px; }
+  .kpi.static { cursor: default; }
+
+  .chart { position: relative; height: 300px; }
+  .sw { display: inline-block; width: 10px; height: 10px; border-radius: 3px; flex: none; }
+  .sev { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+  .sev i { font-style: normal; font-size: 11px; }
+  .type { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; white-space: nowrap; color: var(--text-2); }
+
+  .bars { display: grid; gap: 7px; }
+  .bars h3 { font-size: 12px; color: var(--text-2); margin: 10px 0 2px; font-weight: 600; }
+  .bars h3:first-child { margin-top: 0; }
+  .brow { display: grid; grid-template-columns: minmax(90px, 34%) 1fr 44px; gap: 8px; align-items: center;
+          border-radius: 6px; padding: 2px 4px; margin: 0 -4px; }
+  .brow[data-click] { cursor: pointer; }
+  .brow[data-click]:hover, .brow.on { background: var(--wash); }
+  .brow .name { display: flex; align-items: center; gap: 6px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 13px; }
+  .brow .track { height: 14px; }
+  .brow .fill { height: 100%; border-radius: 0 4px 4px 0; min-width: 2px; }
+  .brow .n { text-align: right; font-variant-numeric: tabular-nums; font-size: 13px; }
+  .split { display: flex; height: 14px; gap: 2px; border-radius: 4px; overflow: hidden; margin: 6px 0 4px; }
+  .split span { height: 100%; }
+  .legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--text-2); }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+
+  .tablewrap { overflow: auto; }
+  .tablewrap.tall { max-height: 520px; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--grid); vertical-align: top; }
+  th { color: var(--text-2); font-weight: 600; font-size: 12px; white-space: nowrap; position: sticky; top: 0; background: var(--panel); }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  td.t { font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--text-2); }
+  .sub { color: var(--text-2); font-size: 12px; }
+  #events tr { cursor: pointer; }
+  #events tr:hover td { background: var(--wash); }
+  #events tr.sel td { background: var(--select); }
+  #events tr:focus-visible { outline: 2px solid var(--t-MULTIMODAL); outline-offset: -2px; }
+  @keyframes fresh { from { background: var(--select); } to { background: transparent; } }
+  #events tr.fresh td { animation: fresh 3s ease-out; }
+  tr.quiet td { color: var(--muted); }
+  .conf { display: inline-flex; align-items: center; gap: 6px; }
+  .conf .meter { width: 38px; height: 6px; background: var(--grid); border-radius: 3px; overflow: hidden; }
+  .conf .meter b { display: block; height: 100%; background: var(--text-2); }
+  .empty { color: var(--text-2); padding: 24px 0; text-align: center; }
+
+  .detail { position: sticky; top: 64px; align-self: start; }
+  .detail .head { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; margin-bottom: 6px; }
+  .detail .title { font-size: 18px; font-weight: 650; width: 100%; }
+  .detail .action { border-left: 3px solid var(--axis); padding: 8px 12px; margin: 12px 0; background: var(--wash); border-radius: 0 8px 8px 0; }
+  .detail .action b { display: block; font-size: 12px; color: var(--text-2); font-weight: 600; margin-bottom: 2px; }
+  .mods { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 12px 0; }
+  .mod { border: 1px solid var(--border); border-radius: 10px; padding: 10px; }
+  .mod.none { color: var(--muted); border-style: dashed; }
+  .mod .k { font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: var(--text-2); font-weight: 600; }
+  .mod .lbl { font-weight: 600; margin: 2px 0; overflow-wrap: anywhere; }
+  .mod .pct { font-size: 22px; font-weight: 650; }
+  .why { font-size: 13px; color: var(--text-2); margin: 10px 0; }
+  dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 12px 0 0; font-size: 12px; }
+  dt { color: var(--text-2); } dd { margin: 0; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+  .detail .close { float: right; }
+
+  .zones { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .zone { border-radius: 10px; padding: 14px 8px; text-align: center; border: 1px solid var(--border); }
+  .zone .n { font-size: 24px; font-weight: 650; } .zone .l { color: var(--text-2); font-size: 12px; }
+  .zone-break { margin-top: 10px; font-size: 12px; color: var(--text-2); }
+  .wearer { text-align: center; color: var(--text-2); font-size: 12px; margin-top: 8px; }
+
+  #tip { position: fixed; pointer-events: none; z-index: 20; background: var(--text); color: var(--panel);
+         font-size: 12px; padding: 6px 9px; border-radius: 6px; max-width: 280px; display: none; white-space: pre-line; }
+
+  @media (max-width: 1100px) {
+    .kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .span8, .span4 { grid-column: 1 / -1; }
+    .detail { position: static; }
+  }
+  @media (max-width: 640px) {
+    header, main, .filters { padding-left: 16px; padding-right: 16px; }
+    .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .filters { position: static; }
+    .mods { grid-template-columns: 1fr; }
+    .fcount { margin-left: 0; }
+  }
 </style>
 </head>
 <body>
 <header>
   <h1>Site Safety · Hazard Monitor <small>Hat Detect on QNX · Tiger Cloud</small></h1>
-  <div class="controls">
-    <div class="seg" id="range">
-      <button data-r="1h">1 h</button><button data-r="8h">Shift (8 h)</button>
-      <button data-r="24h">24 h</button><button data-r="7d">7 days</button>
-    </div>
-    <select id="device"><option value="">All hats</option></select>
-    <span class="live"><span class="dot" id="dot"></span><span id="updated">connecting…</span></span>
-  </div>
+  <span class="live"><span class="dot" id="dot"></span><span id="updated">connecting…</span></span>
 </header>
+
+<div class="filters" role="region" aria-label="Filters">
+  <div class="seg" id="range" role="group" aria-label="Time range">
+    <button data-r="1h">1 h</button><button data-r="8h">Shift (8 h)</button>
+    <button data-r="24h">24 h</button><button data-r="7d">7 days</button><button data-r="custom">Custom</button>
+  </div>
+  <span class="custom" id="custom">
+    <input type="datetime-local" id="from" aria-label="From"> to <input type="datetime-local" id="to" aria-label="To">
+  </span>
+  <select id="device" aria-label="Hat"><option value="">All hats</option></select>
+  <select id="hazard" aria-label="Hazard"><option value="">All hazards</option></select>
+  <select id="severity" aria-label="Severity">
+    <option value="">Any severity</option><option value="high">High</option>
+    <option value="medium">Medium</option><option value="low">Low</option>
+  </select>
+  <select id="fusion" aria-label="Event type">
+    <option value="">All event types</option><option value="MULTIMODAL">Multimodal</option>
+    <option value="AUDIO_ONLY">Audio only</option><option value="VISION_ONLY">Vision only</option>
+  </select>
+  <select id="source" aria-label="Detection source">
+    <option value="">Any source</option><option value="audio">Heard (includes audio)</option>
+    <option value="video">Seen (includes video)</option>
+  </select>
+  <button class="linkbtn" id="reset" type="button">Reset filters</button>
+  <span class="fcount" id="fcount"></span>
+</div>
+
 <main>
-  <div class="banner" id="banner"></div>
-  <section class="kpis">
-    <div class="card kpi"><h2>Detections</h2><div class="v" id="k-det">–</div><div class="s" id="k-det-s"></div></div>
-    <div class="card kpi"><h2>Alerts to wearers</h2><div class="v" id="k-alerts">–</div><div class="s">after 3 s cooldown</div></div>
-    <div class="card kpi alarm"><h2>High-severity alerts</h2><div class="v" id="k-high">–</div><div class="s">alarms, sirens, impacts, horn + vehicle</div></div>
-    <div class="card kpi"><h2>Hazard types</h2><div class="v" id="k-types">–</div><div class="s" id="k-types-s"></div></div>
-    <div class="card kpi"><h2>Last alert</h2><div class="v" id="k-last" style="font-size:22px">–</div><div class="s" id="k-last-s"></div></div>
+  <div class="banner" id="banner" role="alert"></div>
+
+  <section class="kpis" aria-label="Summary">
+    <div class="card kpi static"><h2>Hazard events</h2><div class="v" id="k-events">–</div><div class="s" id="k-events-s"></div></div>
+    <button class="card kpi" data-kpi="severity:high"><h2><span class="sev"><i style="color:var(--s-high)">▲</i></span>High severity</h2>
+      <div class="v" id="k-high">–</div><div class="s" id="k-high-s"></div></button>
+    <button class="card kpi" data-kpi="fusion:MULTIMODAL"><h2><span class="sw" style="background:var(--t-MULTIMODAL)"></span>Multimodal</h2>
+      <div class="v" id="k-multi">–</div><div class="s" id="k-multi-s"></div></button>
+    <button class="card kpi" data-kpi="fusion:AUDIO_ONLY"><h2><span class="sw" style="background:var(--t-AUDIO_ONLY)"></span>Audio only</h2>
+      <div class="v" id="k-audio">–</div><div class="s" id="k-audio-s"></div></button>
+    <button class="card kpi" data-kpi="fusion:VISION_ONLY"><h2><span class="sw" style="background:var(--t-VISION_ONLY)"></span>Vision only</h2>
+      <div class="v" id="k-video">–</div><div class="s" id="k-video-s"></div></button>
   </section>
 
   <section class="card span8">
-    <h2>Alerts over time, by severity</h2>
-    <div class="chart"><canvas id="timeline"></canvas></div>
+    <h2>Events over time, by type <span class="note" id="bucket-note"></span></h2>
+    <div class="chart"><canvas id="timeline" role="img" aria-label="Hazard events over time, stacked by event type"></canvas></div>
   </section>
   <section class="card span4">
-    <h2>Where alerts were around the wearer</h2>
+    <h2>Breakdown</h2>
+    <div class="bars" id="breakdown"></div>
+  </section>
+
+  <section class="card span8">
+    <h2>Event timeline <span class="note" id="events-note"></span></h2>
+    <div class="tablewrap tall"><table>
+      <thead><tr><th>Time</th><th>Hazard</th><th>Severity</th><th>Type</th>
+        <th class="num">Audio conf.</th><th class="num">Vision conf.</th><th>Recommended action</th></tr></thead>
+      <tbody id="events"></tbody>
+    </table></div>
+  </section>
+  <section class="card span4 detail" id="detail" aria-live="polite"></section>
+
+  <section class="card span8">
+    <h2>Events by hazard <span class="note">click to filter</span></h2>
+    <div class="bars" id="hazards"></div>
+  </section>
+  <section class="card span4">
+    <h2>Where events were around the wearer</h2>
     <div class="zones" id="zones"></div>
     <div class="wearer">▲ wearer facing forward (camera view)</div>
     <div class="zone-break" id="zone-break"></div>
   </section>
 
-  <section class="card span8">
-    <h2>Hazards identified · alerts by hazard</h2>
-    <div class="chart"><canvas id="hazards"></canvas></div>
-  </section>
-  <section class="card span4">
-    <h2>Recent alerts</h2>
-    <div class="feed" id="feed"></div>
-  </section>
-
   <section class="card span12">
     <h2>Hazard register</h2>
     <div class="tablewrap"><table>
-      <thead><tr><th>Hazard</th><th>Severity</th><th>What it is</th><th class="num">Detections</th>
-        <th class="num">Alerts</th><th class="num">Peak conf.</th><th>Last seen</th><th>Recommended control</th></tr></thead>
+      <thead><tr><th>Hazard</th><th>Severity</th><th>What it is</th><th class="num">Events</th>
+        <th class="num">Alerted</th><th class="num">Peak conf.</th><th>Last seen</th><th>Recommended control</th></tr></thead>
       <tbody id="register"></tbody>
     </table></div>
   </section>
 </main>
+<div id="tip" role="tooltip"></div>
+
 <script>
+const $ = id => document.getElementById(id);
 const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const SEV = ["high", "medium", "low"];
-const NAMES = { COMBINED: "Horn + vehicle", ALARM: "Alarm", SIREN: "Siren", IMPACT: "Impact / crash", FIRE: "Fire",
-                HORN: "Horn", VOICE: "Shouting", VEHICLE: "Vehicle", SHARP: "Sharp object", PERSON: "Person" };
-const name = h => NAMES[h] || h;
-let state = { range: localGet("range") || "8h", device: localGet("device") || "" };
-let charts = {}, lastOk = 0;
+const SEV_ICON = { high: "▲", medium: "◆", low: "●" };
+const TYPES = ["MULTIMODAL", "AUDIO_ONLY", "VISION_ONLY"];
+const TYPE_NAME = { MULTIMODAL: "Multimodal", AUDIO_ONLY: "Audio only", VISION_ONLY: "Vision only" };
+const NAMES = { VEHICLE_HAZARD: "Vehicle hazard", WORKER_DISTRESS: "Worker in distress", COMBINED: "Horn + vehicle (pre-fusion)",
+                ALARM: "Alarm", SIREN: "Siren", IMPACT: "Impact / crash", FIRE: "Fire", HORN: "Horn",
+                VOICE: "Shouting", VEHICLE: "Vehicle", SHARP: "Sharp object", PERSON: "Person" };
+const FILTERS = ["range", "from", "to", "device", "hazard", "severity", "fusion", "source"];
+const DEFAULTS = { range: "8h", from: "", to: "", device: "", hazard: "", severity: "", fusion: "", source: "" };
 
-function localGet(k) { try { return localStorage.getItem("hd-" + k); } catch { return null; } }
-function localSet(k, v) { try { localStorage.setItem("hd-" + k, v); } catch {} }
-function esc(s) { return String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+const name = h => NAMES[h] || String(h || "").replace(/_/g, " ").toLowerCase().replace(/^./, c => c.toUpperCase());
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const pct = v => v == null ? "–" : Math.round(v * 100) + "%";
+const sevTag = s => `<span class="sev"><i style="color:var(--s-${esc(s)})" aria-hidden="true">${SEV_ICON[s] || "●"}</i>${esc(s)}</span>`;
+const typeTag = t => `<span class="type"><span class="sw" style="background:var(--t-${esc(t)})"></span>${esc(TYPE_NAME[t] || t)}</span>`;
+const fmtTime = (iso, withDate) => iso ? new Date(iso).toLocaleString([], withDate
+  ? { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" }
+  : { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "";
 function ago(iso) {
   if (!iso) return "never";
   const s = Math.max(0, (Date.now() - new Date(iso)) / 1000);
@@ -141,107 +275,306 @@ function ago(iso) {
   if (s < 86400) return Math.round(s / 3600) + " h ago";
   return Math.round(s / 86400) + " d ago";
 }
-const clock = iso => iso ? new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "";
-const sevPill = s => `<span class="sev ${s}">${s}</span>`;
+const share = (n, total) => total ? Math.round(100 * n / total) + "% of events" : "no events";
+function localGet(k) { try { return localStorage.getItem("hd2-" + k); } catch { return null; } }
+function localSet(k, v) { try { localStorage.setItem("hd2-" + k, v); } catch {} }
 
-document.querySelectorAll("#range button").forEach(b => {
-  b.classList.toggle("on", b.dataset.r === state.range);
-  b.onclick = () => { state.range = b.dataset.r; localSet("range", state.range);
-    document.querySelectorAll("#range button").forEach(x => x.classList.toggle("on", x === b)); load(); };
-});
-document.getElementById("device").onchange = e => { state.device = e.target.value; localSet("device", state.device); load(); };
+let state = Object.fromEntries(FILTERS.map(k => [k, localGet(k) ?? DEFAULTS[k]]));
+let data = null, selected = localGet("selected") || "", selectedEvent = null, seen = null, chart = null, inflight = null;
 
-function chart(id, cfg) {
-  if (charts[id]) { charts[id].data = cfg.data; charts[id].update("none"); return; }
-  charts[id] = new Chart(document.getElementById(id), cfg);
-}
-function axes(stacked, horizontal) {
-  const grid = { color: css("--line") }, ticks = { color: css("--muted") };
-  return { x: { stacked, grid: horizontal ? grid : { display: false }, ticks, beginAtZero: true },
-           y: { stacked, grid: horizontal ? { display: false } : grid, ticks, beginAtZero: true } };
-}
-
-function render(d) {
-  const k = d.kpis;
-  document.getElementById("k-det").textContent = k.detections.toLocaleString();
-  document.getElementById("k-det-s").textContent = `${k.devices} hat${k.devices === 1 ? "" : "s"} reporting · last ${ago(k.last_event)}`;
-  document.getElementById("k-alerts").textContent = k.alerts.toLocaleString();
-  document.getElementById("k-high").textContent = k.high_alerts.toLocaleString();
-  document.getElementById("k-types").textContent = k.hazard_types;
-  document.getElementById("k-types-s").textContent = `of ${d.register.length} in the register`;
-  document.getElementById("k-last").textContent = k.last_alert ? name(k.last_alert.hazard) : "None";
-  document.getElementById("k-last-s").textContent = k.last_alert ? `${ago(k.last_alert.time)} · ${k.last_alert.device}` : "no alerts in this period";
-
-  const sel = document.getElementById("device");
-  const opts = [""].concat(d.devices.map(x => x.id));
-  if (sel.options.length !== opts.length || opts.some((o, i) => sel.options[i].value !== o)) {
-    sel.innerHTML = opts.map(o => `<option value="${esc(o)}">${o ? esc(o) : "All hats"}</option>`).join("");
+// ---------------------------------------------------------------- filters
+function syncControls() {
+  document.querySelectorAll("#range button").forEach(b => b.classList.toggle("on", b.dataset.r === state.range));
+  $("custom").classList.toggle("on", state.range === "custom");
+  $("from").value = state.from; $("to").value = state.to;
+  for (const k of ["device", "hazard", "severity", "fusion", "source"]) {
+    const el = $(k);
+    if ([...el.options].some(o => o.value === state[k])) el.value = state[k];
+    el.classList.toggle("set", !!state[k]);
   }
-  sel.value = state.device;
+  document.querySelectorAll("[data-kpi]").forEach(b => {
+    const [k, v] = b.dataset.kpi.split(":");
+    b.classList.toggle("on", state[k] === v);
+    b.setAttribute("aria-pressed", state[k] === v);
+  });
+  const n = ["device", "hazard", "severity", "fusion", "source"].filter(k => state[k]).length;
+  $("fcount").textContent = n ? `${n} filter${n > 1 ? "s" : ""} on` : "";
+  $("reset").style.visibility = n || state.range !== "8h" ? "visible" : "hidden";
+}
+function setFilter(k, v) {
+  state[k] = v; localSet(k, v); syncControls(); load();
+}
+document.querySelectorAll("#range button").forEach(b => b.onclick = () => {
+  if (b.dataset.r === "custom" && !state.from) {      // start from the window being viewed
+    const toLocal = d => new Date(d - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+    const until = data ? new Date(data.filters.until) : new Date(), since = data ? new Date(data.filters.since) : new Date(Date.now() - 8 * 3600e3);
+    state.from = toLocal(since); state.to = toLocal(until); localSet("from", state.from); localSet("to", state.to);
+  }
+  setFilter("range", b.dataset.r);
+});
+["from", "to"].forEach(k => $(k).onchange = e => setFilter(k, e.target.value));
+["device", "hazard", "severity", "fusion", "source"].forEach(k => $(k).onchange = e => setFilter(k, e.target.value));
+document.querySelectorAll("[data-kpi]").forEach(b => b.onclick = () => {
+  const [k, v] = b.dataset.kpi.split(":");
+  setFilter(k, state[k] === v ? "" : v);
+});
+$("reset").onclick = () => { for (const k of FILTERS) { state[k] = DEFAULTS[k]; localSet(k, DEFAULTS[k]); } syncControls(); load(); };
 
-  chart("timeline", { type: "bar",
-    data: { labels: d.timeline.labels, datasets: SEV.map(s => ({ label: s[0].toUpperCase() + s.slice(1),
-      data: d.timeline.series[s] || [], backgroundColor: css("--" + s), borderRadius: 3, maxBarThickness: 28 })) },
-    options: { maintainAspectRatio: false, animation: false, scales: axes(true, false),
-      plugins: { legend: { position: "bottom", labels: { color: css("--muted"), boxWidth: 12 } } } } });
+function query() {
+  const p = new URLSearchParams();
+  for (const k of ["range", "device", "hazard", "severity", "fusion", "source"]) if (state[k]) p.set(k, state[k]);
+  if (state.range === "custom") {
+    if (state.from) p.set("from", new Date(state.from).toISOString());
+    if (state.to) p.set("to", new Date(state.to).toISOString());
+  }
+  return p.toString();
+}
 
-  const hz = d.hazards.reduce((m, h) => { (m[h.hazard] ||= { ...h, detections: 0, alerts: 0 });
-    m[h.hazard].detections += h.detections; m[h.hazard].alerts += h.alerts; return m; }, {});
-  const hl = Object.values(hz);
-  chart("hazards", { type: "bar",
-    data: { labels: hl.map(h => name(h.hazard)), datasets: [
-      { label: "Alerts", data: hl.map(h => h.alerts), backgroundColor: hl.map(h => css("--" + h.severity)),
-        borderRadius: 3, maxBarThickness: 22 } ] },
-    options: { indexAxis: "y", maintainAspectRatio: false, animation: false, scales: axes(false, true),
-      plugins: { legend: { display: false },
-        tooltip: { callbacks: { label: c => ` ${c.raw} alerts (${hl[c.dataIndex].severity})`,
-                                afterLabel: c => ` ${hl[c.dataIndex].detections.toLocaleString()} detections in total` } } } } });
+// ---------------------------------------------------------------- tooltip for HTML bars
+const tip = $("tip");
+document.addEventListener("mousemove", e => {
+  const t = e.target.closest("[data-tip]");
+  if (!t) { tip.style.display = "none"; return; }
+  tip.textContent = t.dataset.tip; tip.style.display = "block";
+  const x = Math.min(e.clientX + 14, innerWidth - tip.offsetWidth - 8), y = Math.min(e.clientY + 14, innerHeight - tip.offsetHeight - 8);
+  tip.style.left = x + "px"; tip.style.top = y + "px";
+});
 
+// ---------------------------------------------------------------- render
+function barRow({ label, n, max, color, tipText, click, on }) {
+  const w = max ? Math.max(n ? 1.5 : 0, 100 * n / max) : 0;
+  return `<div class="brow${on ? " on" : ""}" ${click ? `data-click="${esc(click)}" role="button" tabindex="0"` : ""} data-tip="${esc(tipText)}">
+    <div class="name">${label}</div>
+    <div class="track"><div class="fill" style="width:${w}%;background:${color}"></div></div>
+    <div class="n">${n.toLocaleString()}</div></div>`;
+}
+
+function renderKpis(d) {
+  const k = d.kpis;
+  $("k-events").textContent = k.events.toLocaleString();
+  $("k-events-s").textContent = `${k.alerted.toLocaleString()} alerted · ${k.devices} hat${k.devices === 1 ? "" : "s"} · last ${ago(k.last_event)}`;
+  $("k-high").textContent = k.high.toLocaleString(); $("k-high-s").textContent = share(k.high, k.events);
+  $("k-multi").textContent = k.multimodal.toLocaleString(); $("k-multi-s").textContent = "heard and seen · " + share(k.multimodal, k.events);
+  $("k-audio").textContent = k.audio_only.toLocaleString(); $("k-audio-s").textContent = "heard only · " + share(k.audio_only, k.events);
+  $("k-video").textContent = k.vision_only.toLocaleString(); $("k-video-s").textContent = "seen only · " + share(k.vision_only, k.events);
+}
+
+function renderTimeline(d) {
+  const b = d.filters.bucket_seconds, multiDay = (new Date(d.filters.until) - new Date(d.filters.since)) > 26 * 3600e3;
+  const labels = d.timeline.buckets.map(iso => new Date(iso).toLocaleString([], b >= 86400
+    ? { weekday: "short", month: "short", day: "numeric" }
+    : multiDay ? { weekday: "short", hour: "2-digit", minute: "2-digit" } : { hour: "2-digit", minute: "2-digit" }));
+  $("bucket-note").textContent = "per " + (b >= 86400 ? "day" : b >= 3600 ? b / 3600 + " h" : b / 60 + " min");
+  const surface = css("--panel");
+  const datasets = TYPES.map((t, i) => ({
+    label: TYPE_NAME[t], data: d.timeline.series[t], backgroundColor: css("--t-" + t),
+    borderColor: surface, borderWidth: { top: 2 }, borderSkipped: "bottom",
+    borderRadius: i === TYPES.length - 1 ? { topLeft: 4, topRight: 4 } : 0, maxBarThickness: 24,
+  }));
+  const grid = { color: css("--grid") }, ticks = { color: css("--muted") };
+  const cfg = {
+    type: "bar", data: { labels, datasets },
+    options: { maintainAspectRatio: false, animation: false,
+      interaction: { mode: "index", intersect: false },
+      scales: { x: { stacked: true, grid: { display: false }, border: { color: css("--axis") }, ticks: { ...ticks, maxRotation: 0, autoSkipPadding: 12 } },
+                y: { stacked: true, beginAtZero: true, grid, border: { display: false }, ticks: { ...ticks, precision: 0 } } },
+      plugins: { legend: { position: "bottom", labels: { color: css("--text-2"), boxWidth: 10, boxHeight: 10, useBorderRadius: true, borderRadius: 3 } },
+        tooltip: { callbacks: { footer: items => "Total " + items.reduce((s, i) => s + i.raw, 0) } } } } };
+  if (chart) { chart.data = cfg.data; chart.options = cfg.options; chart.update("none"); }
+  else chart = new Chart($("timeline"), cfg);
+}
+
+function renderBreakdown(d) {
+  const k = d.kpis, total = k.events;
+  const sevMax = Math.max(1, ...d.severity.map(s => s.events));
+  const srcMax = Math.max(1, k.with_audio, k.with_video);
+  const single = k.audio_only + k.vision_only;
+  $("breakdown").innerHTML = `
+    <h3>By severity</h3>
+    ${d.severity.map(s => barRow({ label: sevTag(s.severity), n: s.events, max: sevMax, color: `var(--s-${s.severity})`,
+       tipText: `${s.severity} severity: ${s.events} events (${share(s.events, total)})`,
+       click: `severity:${s.severity}`, on: state.severity === s.severity })).join("")}
+    <h3>By detection source</h3>
+    ${barRow({ label: "Heard (audio)", n: k.with_audio, max: srcMax, color: "var(--text-2)",
+       tipText: `${k.with_audio} events include an audio detection (audio only + multimodal)`, click: "source:audio", on: state.source === "audio" })}
+    ${barRow({ label: "Seen (video)", n: k.with_video, max: srcMax, color: "var(--text-2)",
+       tipText: `${k.with_video} events include a camera detection (vision only + multimodal)`, click: "source:video", on: state.source === "video" })}
+    <h3>Multimodal vs single-modality</h3>
+    <div class="split" role="img" aria-label="${k.multimodal} multimodal, ${k.audio_only} audio only, ${k.vision_only} vision only">
+      ${TYPES.map(t => { const n = { MULTIMODAL: k.multimodal, AUDIO_ONLY: k.audio_only, VISION_ONLY: k.vision_only }[t];
+        return n ? `<span style="flex:${n};background:var(--t-${t})" data-tip="${TYPE_NAME[t]}: ${n} (${share(n, total)})"></span>` : ""; }).join("") || `<span style="flex:1;background:var(--grid)"></span>`}
+    </div>
+    <div class="legend">
+      <span>${typeTag("MULTIMODAL")} ${total ? Math.round(100 * k.multimodal / total) : 0}%</span>
+      <span>single-modality ${total ? Math.round(100 * single / total) : 0}% (${k.audio_only} audio, ${k.vision_only} vision)</span>
+    </div>`;
+}
+
+function renderEvents(d) {
+  const fresh = seen ? d.events.filter(e => !seen.has(e.event_id)).map(e => e.event_id) : [];
+  seen = new Set(d.events.map(e => e.event_id));
+  const withDate = (new Date(d.filters.until) - new Date(d.filters.since)) > 24 * 3600e3;
+  $("events-note").textContent = d.events.length >= d.events_limit
+    ? `latest ${d.events_limit} of ${d.kpis.events.toLocaleString()} · click a row for details` : "click a row for details";
+  $("events").innerHTML = d.events.length ? d.events.map(e => `
+    <tr data-id="${esc(e.event_id)}" tabindex="0" class="${e.event_id === selected ? "sel" : ""} ${fresh.includes(e.event_id) ? "fresh" : ""}">
+      <td class="t">${esc(fmtTime(e.time, withDate))}<div class="sub">${esc(e.device_id)}</div></td>
+      <td><b>${esc(name(e.hazard))}</b><div class="sub">${esc(e.label)}${e.position ? " · " + esc(e.position) : ""}</div></td>
+      <td>${sevTag(e.severity)}</td>
+      <td>${typeTag(e.fusion)}</td>
+      <td class="num">${conf(e.audio_score)}</td>
+      <td class="num">${conf(e.video_score)}</td>
+      <td class="sub">${esc(e.control || "–")}</td>
+    </tr>`).join("") : `<tr><td colspan="7" class="empty">No hazard events match these filters</td></tr>`;
+}
+const conf = v => v == null ? `<span class="sub">–</span>` : `<span class="conf"><span class="meter"><b style="width:${Math.round(v * 100)}%"></b></span>${pct(v)}</span>`;
+
+$("events").addEventListener("click", e => { const tr = e.target.closest("tr[data-id]"); if (tr) select(tr.dataset.id); });
+$("events").addEventListener("keydown", e => {
+  const tr = e.target.closest("tr[data-id]"); if (!tr) return;
+  if (e.key === "Enter" || e.key === " ") { e.preventDefault(); select(tr.dataset.id); }
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); (e.key === "ArrowDown" ? tr.nextElementSibling : tr.previousElementSibling)?.focus(); }
+});
+document.addEventListener("keydown", e => { if (e.key === "Escape" && selected) select(""); });
+function select(id) {
+  selected = selected === id ? "" : id; localSet("selected", selected);
+  selectedEvent = data?.events.find(e => e.event_id === selected) || null;
+  document.querySelectorAll("#events tr[data-id]").forEach(tr => tr.classList.toggle("sel", tr.dataset.id === selected));
+  renderDetail();
+}
+
+function explain(e) {
+  if (e.fusion === "MULTIMODAL") return e.explanation || "Audio and video detections were combined by a fusion rule.";
+  if (e.fusion === "AUDIO_ONLY") return "Heard only: no object that a fusion rule pairs with this sound was seen by the camera within the rule's window, so it stands as an audio-only event.";
+  return "Seen only: no sound that a fusion rule pairs with this object was heard within the rule's window, so it stands as a vision-only event (a sighting, not a confirmed hazard).";
+}
+function duration(e) {
+  if (!e.last_time) return "–";
+  const s = Math.max(0, (new Date(e.last_time) - new Date(e.time)) / 1000);
+  return s < 60 ? s.toFixed(1) + " s" : Math.round(s / 60) + " min";
+}
+function modCard(kind, group, label, score, count, extra) {
+  if (!label) return `<div class="mod none"><div class="k">${kind}</div><div class="lbl">Not ${kind === "Audio" ? "heard" : "seen"}</div><div class="sub">no ${kind.toLowerCase()} part in this event</div></div>`;
+  return `<div class="mod"><div class="k">${kind} · ${esc(name(group))}</div><div class="lbl">${esc(label)}</div>
+    <div class="pct">${pct(score)}</div><div class="sub">peak confidence · ${count ?? "?"} detection${count === 1 ? "" : "s"}${extra || ""}</div></div>`;
+}
+function renderDetail() {
+  const el = $("detail"), e = selectedEvent;
+  if (!e) {
+    el.innerHTML = `<h2>Event details</h2><div class="empty">Select an event in the timeline to see its full record: both model classifications and confidences, why they were combined, and what to do.</div>`;
+    return;
+  }
+  const stale = data && !data.events.some(x => x.event_id === e.event_id);
+  el.innerHTML = `
+    <h2>Event details <button class="linkbtn close" type="button" id="close-detail" aria-label="Close details">Close</button></h2>
+    <div class="head"><div class="title">${esc(name(e.hazard))}</div>${sevTag(e.severity)} ${typeTag(e.fusion)}
+      <span class="sub">${e.alerted ? "✓ wearer alerted" : "not alerted"}</span></div>
+    <div class="sub">${esc(fmtTime(e.time, true))} · ${esc(e.device_id)} · lasted ${duration(e)}${stale ? " · not in the current list" : ""}</div>
+    <div class="mods">
+      ${modCard("Audio", e.audio_group, e.audio_label, e.audio_score, e.audio_count)}
+      ${modCard("Vision", e.video_group, e.video_label, e.video_score, e.video_count, e.position ? " · " + esc(e.position) : "")}
+    </div>
+    <div class="why"><b>Fusion:</b> ${esc(explain(e))}</div>
+    <div class="action"><b>Recommended action</b>${esc(e.control || "No control in the hazard register for this hazard.")}</div>
+    ${e.description ? `<div class="sub">${esc(e.description)}</div>` : ""}
+    <dl>
+      <dt>Event ID</dt><dd>${esc(e.event_id)}</dd>
+      <dt>Hazard code</dt><dd>${esc(e.hazard)}</dd>
+      <dt>Fusion type</dt><dd>${esc(e.fusion)}${e.correlation_window != null ? ` · window ${e.correlation_window} s` : ""}</dd>
+      <dt>First detected</dt><dd>${esc(e.time)}</dd>
+      <dt>Last detected</dt><dd>${esc(e.last_time || "–")}</dd>
+      <dt>Record status</dt><dd>${esc(e.status)}</dd>
+      <dt>Alert issued</dt><dd>${e.alerted ? "yes" : "no"}</dd>
+      <dt>Label</dt><dd>${esc(e.label)}</dd>
+      ${e.bbox ? `<dt>Bounding box</dt><dd>[${e.bbox.map(Number).join(", ")}] px</dd>` : ""}
+    </dl>`;
+  $("close-detail").onclick = () => select("");
+}
+
+function renderHazards(d) {
+  const rows = d.register.filter(r => r.events || state.hazard === r.hazard);
+  const max = Math.max(1, ...rows.map(r => r.events));
+  $("hazards").innerHTML = rows.length ? rows.map(r => barRow({
+    label: `<i style="color:var(--s-${esc(r.severity)});font-style:normal" aria-hidden="true">${SEV_ICON[r.severity] || "●"}</i> ${esc(name(r.hazard))}`,
+    n: r.events, max, color: `var(--s-${r.severity})`,
+    tipText: `${name(r.hazard)} (${r.severity})\n${r.events} events · ${r.alerted} alerted\nPeak confidence ${pct(r.peak)} · last ${ago(r.last_seen)}`,
+    click: `hazard:${r.hazard}`, on: state.hazard === r.hazard })).join("")
+    : `<div class="empty">No hazard events match these filters</div>`;
+}
+
+function renderZones(d) {
   const pos = { left: 0, centre: 0, right: 0 }, byZone = { left: {}, centre: {}, right: {} };
   d.positions.forEach(p => { if (p.position in pos) { pos[p.position] += p.count;
     byZone[p.position][p.hazard] = (byZone[p.position][p.hazard] || 0) + p.count; } });
   const max = Math.max(1, ...Object.values(pos));
-  document.getElementById("zones").innerHTML = ["left", "centre", "right"].map(z => {
-    const a = pos[z] / max;
-    return `<div class="zone" style="background: color-mix(in srgb, var(--high) ${Math.round(a * 35)}%, var(--panel))">
-      <div class="n">${pos[z]}</div><div class="l">${z}</div></div>`; }).join("");
-  document.getElementById("zone-break").innerHTML = ["left", "centre", "right"].map(z => {
+  $("zones").innerHTML = ["left", "centre", "right"].map(z => `
+    <div class="zone" style="background: color-mix(in srgb, var(--t-MULTIMODAL) ${Math.round(pos[z] / max * 28)}%, var(--panel))"
+         data-tip="${esc(Object.entries(byZone[z]).map(([h, n]) => `${name(h)}: ${n}`).join("\n") || "none")}">
+      <div class="n">${pos[z]}</div><div class="l">${z}</div></div>`).join("");
+  $("zone-break").innerHTML = ["left", "centre", "right"].map(z => {
     const parts = Object.entries(byZone[z]).sort((a, b) => b[1] - a[1]).map(([h, n]) => `${name(h)} ${n}`);
     return parts.length ? `<div><b>${z}:</b> ${esc(parts.join(", "))}</div>` : ""; }).join("") ||
-    "Video alerts (people, vehicles) show which side of the wearer they came from.";
-
-  document.getElementById("feed").innerHTML = d.recent.length ? d.recent.map(r => `
-    <div class="item"><div class="t">${clock(r.time)}<br>${esc(r.device)}</div>
-      <div><div class="what">${sevPill(r.severity)} ${esc(name(r.hazard))}${r.position ? " · " + esc(r.position) : ""}</div>
-        <div class="ctl">${esc(r.label)} (${Math.round(r.score * 100)}%) · ${esc(r.control || "")}</div></div></div>`).join("")
-    : `<div class="empty">No alerts in this period</div>`;
-
-  document.getElementById("register").innerHTML = d.register.map(r => `
-    <tr class="${r.detections ? "" : "quiet"}"><td><b>${esc(name(r.hazard))}</b><br><span style="color:var(--muted);font-size:12px">${esc(r.source)}</span></td>
-      <td>${sevPill(r.severity)}</td><td>${esc(r.description)}</td>
-      <td class="num">${r.detections.toLocaleString()}</td><td class="num">${r.alerts.toLocaleString()}</td>
-      <td class="num">${r.peak != null ? Math.round(r.peak * 100) + "%" : "–"}</td>
-      <td style="white-space:nowrap">${r.last_seen ? ago(r.last_seen) : "–"}</td><td>${esc(r.control)}</td></tr>`).join("");
+    "Events with a camera part show which side of the wearer the object was on.";
 }
 
+function renderRegister(d) {
+  $("register").innerHTML = d.register.map(r => `
+    <tr class="${r.events ? "" : "quiet"}"><td><b>${esc(name(r.hazard))}</b><div class="sub">${esc(r.source || "")}</div></td>
+      <td>${sevTag(r.severity)}</td><td>${esc(r.description || "–")}</td>
+      <td class="num">${r.events.toLocaleString()}</td><td class="num">${r.alerted.toLocaleString()}</td>
+      <td class="num">${pct(r.peak)}</td>
+      <td style="white-space:nowrap">${r.last_seen ? ago(r.last_seen) : "–"}</td><td>${esc(r.control || "–")}</td></tr>`).join("");
+}
+
+function renderOptions(d) {
+  const fill = (el, first, opts) => {
+    const want = [["", first]].concat(opts);
+    if (el.options.length !== want.length || want.some(([v], i) => el.options[i].value !== v))
+      el.innerHTML = want.map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join("");
+  };
+  fill($("device"), "All hats", d.devices.map(x => [x.id, x.id]));
+  fill($("hazard"), "All hazards", d.register.map(r => [r.hazard, name(r.hazard)]));
+}
+
+function render(d) {
+  data = d;
+  renderOptions(d); syncControls(); renderKpis(d); renderTimeline(d); renderBreakdown(d);
+  renderEvents(d); renderHazards(d); renderZones(d); renderRegister(d);
+  if (selected) selectedEvent = d.events.find(e => e.event_id === selected) || selectedEvent;
+  renderDetail();
+}
+
+document.addEventListener("click", e => { const r = e.target.closest("[data-click]"); if (r) clickFilter(r.dataset.click); });
+document.addEventListener("keydown", e => { const r = e.target.closest?.("[data-click]");
+  if (r && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); clickFilter(r.dataset.click); } });
+function clickFilter(spec) { const [k, v] = spec.split(":"); setFilter(k, state[k] === v ? "" : v); }
+
+// ---------------------------------------------------------------- polling
+let lastOk = 0;
 async function load() {
-  const dot = document.getElementById("dot"), upd = document.getElementById("updated"), banner = document.getElementById("banner");
+  const q = query();
+  inflight = q;
   try {
-    const res = await fetch(`/api/data?range=${state.range}&device=${encodeURIComponent(state.device)}`);
+    const res = await fetch("/api/data?" + q, { cache: "no-store" });
     const d = await res.json();
     if (!res.ok) throw new Error(d.error || res.statusText);
+    if (inflight !== q) return;                     // filters changed while loading
     render(d);
     lastOk = Date.now();
-    dot.className = "dot"; upd.textContent = "live · updated " + clock(d.now);
-    banner.style.display = "none";
+    $("dot").className = "dot"; $("updated").textContent = "live · updated " + fmtTime(d.now);
+    $("banner").style.display = "none";
   } catch (e) {
-    dot.className = "dot err"; upd.textContent = "can't reach Tiger Cloud";
-    banner.textContent = "Dashboard can't load data: " + e.message; banner.style.display = "block";
+    if (inflight !== q) return;
+    $("dot").className = "dot err"; $("updated").textContent = "can't reach Tiger Cloud";
+    $("banner").textContent = "Dashboard can't load data: " + e.message; $("banner").style.display = "block";
   }
 }
+syncControls();
+renderDetail();
 load();
 setInterval(load, 5000);
-setInterval(() => { if (lastOk && Date.now() - lastOk > 15000) document.getElementById("dot").className = "dot stale"; }, 2000);
+setInterval(() => { if (lastOk && Date.now() - lastOk > 15000) $("dot").className = "dot stale"; }, 2000);
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => data && render(data));
 </script>
 </body>
 </html>

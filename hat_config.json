@@ -15,13 +15,24 @@
   },
 
   "alerts": {
-    "cooldown_seconds": 3.0,
-    "combine_window_seconds": 2.0,
     "severity": {
-      "COMBINED": "high", "ALARM": "high", "SIREN": "high", "IMPACT": "high", "FIRE": "high",
+      "ALARM": "high", "SIREN": "high", "IMPACT": "high", "FIRE": "high",
       "HORN": "medium", "VOICE": "medium", "VEHICLE": "medium", "SHARP": "medium",
       "PERSON": "low"
     }
+  },
+
+  "fusion": {
+    "confirm_wait_seconds": 1.0,
+    "episode_gap_seconds": 3.0,
+    "escalate_on_confirmation": true,
+    "realert_on_escalation": true,
+    "rules": [
+      {"hazard": "VEHICLE_HAZARD", "audio": ["HORN", "SIREN"], "video": ["VEHICLE"],
+       "window_seconds": 3.0, "severity": "high"},
+      {"hazard": "WORKER_DISTRESS", "audio": ["VOICE", "IMPACT"], "video": ["PERSON"],
+       "window_seconds": 3.0, "severity": "high"}
+    ]
   },
 
   "gpio": {
@@ -31,5 +42,6 @@
     "tone_hz": 2700
   },
 
-  "event_log": "~/hatdetect/events.jsonl"
+  "event_log": "~/hatdetect/events.jsonl",
+  "detection_log": "~/hatdetect/detections.jsonl"
 }
