@@ -11,6 +11,20 @@ history, analytics and a live dashboard.
 > **Scope:** video and audio detection only. Anything else from the original
 > hat idea is out of scope for this build.
 
+## 0. QNX challenge rules
+
+**Hard requirements**
+1. Project uses the QNX OS. ✅ Raspberry Pi 5 running QNX (loaner Pis come pre-loaded)
+2. Project includes one of the open-source AI modules from <https://oss.qnx.com>. ✅ **`tflite-runtime` 2.21.0** (TensorFlow Lite), installed from oss.qnx.com
+
+**How this design answers the judging criteria**
+| Criterion | Our answer |
+|-----------|-----------|
+| "Cannot-fail" embedded application? | Safety alerts (sirens, horns, approaching cars) for the wearer; a missed alert is a real-world risk |
+| Requires real-time or reliability? | Alert within ~1.5 s of a sound; detection keeps running with no network |
+| Uses AI in an interesting or creative way? | Two models fused: what the hat *hears* + what it *sees* → one alert |
+| Runs on the embedded hardware, not the cloud? | All inference and alerts on the Pi; Tiger Data only *stores* events for history and the dashboard |
+
 ---
 
 ## 1. Functional requirements
@@ -64,7 +78,7 @@ history, analytics and a live dashboard.
 | NFR-4 | Runs on battery power for at least the length of the demo (~30 min) |
 | NFR-5 | Wearable: board, mic and camera mounted on or near the hat, with a power bank in a pocket |
 | NFR-6 | Thresholds, target classes and cooldowns set in a config file, not hard-coded |
-| NFR-7 | Written in C++17, cross-compiled with the QNX SDP 8.0 toolchain |
+| NFR-7 | Runs on the oss.qnx.com `tflite-runtime` package; app written in C++17 (QNX SDP 8.0 toolchain) or Python 3 (see §7) |
 | NFR-8 | Database credentials kept in a `.env` file on the laptop, never committed and never stored on the Pi |
 | NFR-9 | An event reaches Tiger Cloud within 2 s of detection while the network is up |
 
@@ -72,8 +86,7 @@ history, analytics and a live dashboard.
 
 | Item | Notes |
 |------|-------|
-| Raspberry Pi 4 or 5 | Running the QNX 8.0 quick-start image |
-| microSD card (32 GB+) | For the QNX image |
+| Raspberry Pi 5 | Loaner from the QNX booth, pre-loaded with QNX |
 | USB microphone | Plug in before `io-audio` starts |
 | Camera | USB webcam (use a blue USB 3.0 port) **or** Raspberry Pi Camera Module 3 |
 | USB-C power bank | 5 V / 3 A+ (Pi 5 needs 5 A for full USB power) |
@@ -86,9 +99,7 @@ history, analytics and a live dashboard.
 
 ### On the dev laptop
 - QNX Software Development Platform 8.0 (free non-commercial licence via QNX Everywhere)
-- CMake ≥ 3.16, git, a native GCC/Clang toolchain (needed to build `flatc`)
-- TensorFlow Lite cross-compiled for QNX aarch64le, from
-  [qnx-ports/build-files](https://github.com/qnx-ports/build-files) (`ports/tensorflow`)
+- CMake ≥ 3.16 and git (only if the app is written in C++)
 - Python 3.10+ with `requirements.txt`, for testing models and running the Tiger Data bridge
 - A Tiger Data account with one Tiger Cloud service (free plan, or the MLH hackathon credits)
 - `psql` (PostgreSQL client), for creating tables and checking data
@@ -96,7 +107,14 @@ history, analytics and a live dashboard.
 ### On the Pi (QNX)
 - `io-audio` running with the USB mic (QNX Sound Architecture / `libasound`)
 - The camera service running (QNX Camera library / `libcamapi`) — check with `camera_example3_viewfinder`
-- `libtensorflow-lite.so` copied over from the cross-compile
+- TensorFlow Lite from **oss.qnx.com**, version **2.21.0** (latest build `2.21.0-r1-1`, Jul 10, 2026):
+  | Package | What it is | Needed for |
+  |---------|-----------|------------|
+  | `tflite-runtime` | The TFLite library | Always |
+  | `tflite-runtime-dev` | Headers for building against it | C++ app (install in the SDP for cross-compiling) |
+  | `python3-tflite-runtime` | Python bindings | Python app or quick tests on the Pi |
+  
+  Install method: ask the QNX mentors how packages are installed on the loaner Pis.
 
 ## 5. Models
 
@@ -152,13 +170,14 @@ A continuous aggregate (`detections_per_minute`) holds counts per minute by
 - [ ] Final list of target objects
 - [ ] Alert output: vibration, buzzer, spoken alert, or screen
 - [ ] Camera: USB webcam or Pi Camera Module 3
-- [ ] Pi 4 or Pi 5
+- [ ] App language: **C++** (direct access to QNX audio and camera APIs) or **Python** (faster to write with `python3-tflite-runtime`, but check that mic and camera are reachable from Python on QNX)
 
 ## 8. Before the hackathon (setup checklist)
 
-- [ ] QNX image flashed and the Pi boots; SSH works
+- [ ] Loaner Pi 5 picked up; it boots and SSH works
 - [ ] QNX SDP installed on at least one laptop; `source ~/qnx800/qnxsdp-env.sh` works
-- [ ] TensorFlow Lite cross-compiled for QNX and a test binary loads a `.tflite` on the Pi
+- [ ] `tflite-runtime` (2.21.0) installed on the Pi from oss.qnx.com
+- [ ] Smoke test on the Pi: load `yamnet.tflite` and run it once on silence; output has 521 scores
 - [ ] USB mic shows up under `/dev/snd` and a test recording plays back
 - [ ] Camera shows frames in `camera_example3_viewfinder`
 - [ ] Both models downloaded and tested on a laptop with `requirements.txt`
