@@ -8,7 +8,12 @@ Based on the IoU/centre-distance Tracker from the cv-tracking branch (live_cam.p
     DOWN      a person whose box was upright (tall) becomes wide: they fell or collapsed
     CLOSE     a person or vehicle fills a large part of the frame (right behind you)
     APPROACH  a box grows quickly (closing in fast)
+    LYING     a person lying still (wide shape, not moving) for a few seconds, even if
+              the fall itself wasn't seen
   Each incident fires once, then re-arms when the condition clears.
+- Motion for every track: approaching / moving away / crossing left|right / still, a
+  speed, and for anything approaching an estimated time to reach the wearer (from how
+  fast its box grows). Vehicles moving away are never announced.
 
 Pure numpy, so it runs on QNX with nothing extra installed.
 """
@@ -71,7 +76,7 @@ def incident_group(kind, tr):
     """Which hazard group a tracker incident alerts as (None: log only, no alert)."""
     if kind == "NEW":
         return tr.group
-    if kind == "DOWN":
+    if kind in ("DOWN", "LYING"):
         return "PERSON_DOWN"
     if kind in ("CLOSE", "APPROACH"):
         return "PERSON_CLOSE" if tr.group == "PERSON" else tr.group
@@ -88,18 +93,30 @@ class Track:
         self.first_seen = self.last_seen = self.entered = t
         self.frames = 1
         self.areas = deque(maxlen=30)                       # (time, box area, cut off by edge)
+        self.path = deque(maxlen=40)                        # (time, centre x, centre y, size), 0..1
+        self.motion, self.ttc, self.speed = "steady", None, 0.0
+        self.lying_since = None
+        self.announced = False
         self.below_since = None
-        self.aspects = deque([aspect(box)], maxlen=30)
+        self.aspects = deque([aspect(box)] if self.full else [], maxlen=30)   # full-body views only
         self.down_frames = 0
         self.armed = {"DOWN": True, "CLOSE": True, "APPROACH": True}
         self.visible = True
         self.areas.append((t, area(box), self.clipped))
+        self._add_path(t)
+
+    def _add_path(self, t):
+        w, h = Track.frame_size
+        cx, cy = centre(self.box)
+        self.path.append((t, cx / w, cy / h, (area(self.box) / float(w * h)) ** 0.5))
 
     def seen(self, box, score, sig, t):
         self.box, self.score, self.last_seen = box, score, t
         self.frames += 1
         self.areas.append((t, area(box), self.clipped))
-        self.aspects.append(aspect(box))
+        self._add_path(t)
+        if self.full:
+            self.aspects.append(aspect(box))
         if sig is not None:
             self.sig = sig if self.sig is None else 0.8 * self.sig + 0.2 * sig
             if not self.gallery or self.likeness(sig) < 0.85:    # keep looks that differ
@@ -111,6 +128,23 @@ class Track:
         w, h = Track.frame_size
         x0, y0, x1, y1 = self.box
         return (x0 <= 4) + (y0 <= 4) + (x1 >= w - 4) + (y1 >= h - 4) >= 2
+
+    @property
+    def full(self):
+        """Whole body in view: the box keeps clear of every frame edge (a box cut off by an
+        edge is a partial body, and its shape says nothing about standing or lying)."""
+        w, h = Track.frame_size
+        x0, y0, x1, y1 = self.box
+        m = 8
+        return x0 > m and y0 > m and x1 < w - m and y1 < h - m
+
+    def on_floor(self, min_frac=0.02):
+        """Could be someone lying on the ground: whole body in view, low in the image (the
+        camera is at head height), and not a tiny far-away box."""
+        w, h = Track.frame_size
+        x0, y0, x1, y1 = self.box
+        return (self.full and (y0 + y1) / 2 >= 0.45 * h
+                and (x1 - x0) * (y1 - y0) >= min_frac * w * h)
 
     def likeness(self, sig):
         """Best colour match against any of this track's remembered looks."""
@@ -127,12 +161,14 @@ class Tracker:
 
     def __init__(self, iou_min=0.25, max_dist=0.2, lost_after_s=1.0, memory_s=120.0,
                  reid_min=0.6, close_area=0.35, approach_ratio=1.8, approach_window_s=1.5,
-                 stand_aspect=1.3, down_aspect=0.9, down_frames=2, settle_s=1.0, rearm_s=3.0):
+                 stand_aspect=1.3, down_aspect=0.9, down_frames=2, settle_s=1.0, rearm_s=3.0,
+                 lying_still_s=5.0, ttc_alert_s=3.0, motion_window_s=1.5):
         self.iou_min, self.max_dist = iou_min, max_dist
         self.lost_after_s, self.memory_s, self.reid_min = lost_after_s, memory_s, reid_min
         self.close_area, self.approach_ratio, self.approach_window_s = close_area, approach_ratio, approach_window_s
         self.stand_aspect, self.down_aspect, self.need_down = stand_aspect, down_aspect, down_frames
         self.settle_s, self.rearm_s = settle_s, rearm_s
+        self.lying_still_s, self.ttc_alert_s, self.motion_window_s = lying_still_s, ttc_alert_s, motion_window_s
         self.tracks = {}
         self.next_id = 1
 
@@ -140,7 +176,7 @@ class Tracker:
     def from_config(cls, cfg):
         keys = ("iou_min", "max_dist", "lost_after_s", "memory_s", "reid_min", "close_area",
                 "approach_ratio", "approach_window_s", "stand_aspect", "down_aspect", "down_frames",
-                "settle_s", "rearm_s")
+                "settle_s", "rearm_s", "lying_still_s", "ttc_alert_s", "motion_window_s")
         return cls(**{k: cfg[k] for k in keys if k in cfg})
 
     def update(self, dets, img, t, sigs=None, size=None):
@@ -189,7 +225,9 @@ class Tracker:
             tr = self.tracks[tid]
             if t - tr.last_seen > self.lost_after_s:   # was out of view, not just a jump
                 tr.areas.clear()                       # don't read the gap as "approaching"
+                tr.path.clear()
                 tr.down_frames = 0
+                tr.lying_since = None
                 tr.entered = t
                 incidents.append(("BACK", tr))
 
@@ -205,7 +243,9 @@ class Tracker:
             self.tracks[tr.id] = tr
             self.next_id += 1
             matched[j] = tr.id
-            incidents.append(("NEW", tr))
+            if group == "PERSON":                      # people: announce at once
+                tr.announced = True
+                incidents.append(("NEW", tr))
 
         # 4. Forget tracks gone too long; check incidents on the visible ones.
         visible = []
@@ -217,6 +257,11 @@ class Tracker:
                     del self.tracks[tid]
                 continue
             visible.append(tr)
+            self._kinematics(tr, t)
+            if not tr.announced and t - tr.first_seen >= self.settle_s:
+                tr.announced = True                    # vehicles: announce unless moving away
+                if tr.motion != "moving away":
+                    incidents.append(("NEW", tr))
             for kind in self._check(tr, w, h, t):
                 incidents.append((kind, tr))
         return visible, incidents
@@ -234,6 +279,39 @@ class Tracker:
             used_d.add(j)
             out[j] = tid
         return out
+
+    def _kinematics(self, tr, t):
+        """Fit the last motion_window_s of the track: size growth (approach), sideways speed."""
+        pts = [p for p in tr.path if t - p[0] <= self.motion_window_s]
+        if len(pts) < 3 or pts[-1][0] - pts[0][0] < 0.4:
+            tr.motion, tr.ttc, tr.speed = "steady", None, 0.0
+            return
+        ts = np.array([p[0] for p in pts]) - pts[0][0]
+        xs, size = np.array([p[1] for p in pts]), np.array([p[3] for p in pts])
+        vx = float(np.polyfit(ts, xs, 1)[0])                 # frame widths per second
+        growth = float(np.polyfit(ts, size, 1)[0]) / max(1e-3, float(size[-1]))   # per second
+        tr.speed = round(max(abs(vx), abs(growth)), 2)
+        tr.ttc = None
+        if growth > 0.15:
+            tr.motion = "approaching"
+            tr.ttc = round(1.0 / growth, 1)                  # looming: size / d(size)/dt
+        elif growth < -0.15:
+            tr.motion = "moving away"
+        elif abs(vx) > 0.15:
+            tr.motion = "crossing left" if vx < 0 else "crossing right"
+        elif max(float(abs(xs - xs.mean()).max()),
+                 float(abs(size - size.mean()).max()) / max(1e-3, float(size.mean()))) < 0.05:
+            tr.motion = "still"
+        else:
+            tr.motion = "steady"
+
+    def _still_for(self, tr, t, secs):
+        pts = [p for p in tr.path if t - p[0] <= secs]
+        if not pts or t - pts[0][0] < secs * 0.8:
+            return False
+        xs, ys, size = (np.array([p[i] for p in pts]) for i in (1, 2, 3))
+        return (xs.max() - xs.min() < 0.08 and ys.max() - ys.min() < 0.08
+                and size.max() / max(1e-3, size.min()) < 1.3)
 
     def _check(self, tr, w, h, t):
         found = []
@@ -261,26 +339,40 @@ class Tracker:
                     if t - ts <= self.approach_window_s and not clipped][:-1]
             if len(base) >= 2:
                 ratio = tr.areas[-1][1] / max(1, min(base))
-                if ratio >= self.approach_ratio:
+                fast = tr.motion == "approaching" and tr.ttc is not None and tr.ttc <= self.ttc_alert_s
+                if ratio >= self.approach_ratio or fast:
                     if tr.armed["APPROACH"]:
                         found.append("APPROACH")
                     tr.armed["APPROACH"] = False
-                elif ratio < 1.2:
+                elif ratio < 1.2 and tr.motion != "approaching":
                     tr.armed["APPROACH"] = True
 
         # DOWN (people only): their usual upright shape turns wide for a few frames.
-        if tr.name == "person" and len(tr.aspects) >= 4:
-            usual = float(np.median(list(tr.aspects)[:-1]))
-            a = tr.aspects[-1]
-            cut_off = (tr.box[3] - tr.box[1]) > 0.9 * h    # too close to judge its shape
-            if not cut_off and usual >= self.stand_aspect and a <= self.down_aspect:
+        if tr.name == "person":
+            a = aspect(tr.box)
+            floor = tr.on_floor()
+            seen_upright = [x for x in list(tr.aspects)[:-1]] if tr.full else list(tr.aspects)
+            usual = float(np.median(seen_upright)) if len(seen_upright) >= 3 else 0.0
+            if floor and usual >= self.stand_aspect and a <= self.down_aspect:
                 tr.down_frames += 1
-            elif a >= self.stand_aspect:
+            elif tr.full and a >= self.stand_aspect:
                 tr.down_frames = 0
                 tr.armed["DOWN"] = True
+            elif not floor:
+                tr.down_frames = 0
             if tr.down_frames >= self.need_down and tr.armed["DOWN"]:
                 tr.armed["DOWN"] = False
                 found.append("DOWN")
+
+            # LYING: wide and not moving for lying_still_s, even if we never saw them upright.
+            if floor and a <= self.down_aspect:
+                tr.lying_since = tr.lying_since or t
+                if (t - tr.lying_since >= self.lying_still_s and tr.armed["DOWN"]
+                        and self._still_for(tr, t, self.lying_still_s)):
+                    tr.armed["DOWN"] = False
+                    found.append("LYING")
+            else:
+                tr.lying_since = None
         return found
 
     def counts(self):

@@ -17,6 +17,10 @@
   their clothing colours and stays quiet. They alert again only if something happens:
   PERSON_DOWN (fell or collapsed), PERSON_CLOSE (right behind you, or closing in fast),
   or a vehicle closing in. Settings: video.tracking in hat_config.json.
+- Tracks also carry motion (approaching / moving away / crossing / still) and an estimated
+  time to reach the wearer. A person lying still is PERSON_DOWN even if the fall wasn't seen.
+  motion.py flags sudden unlabelled movement (MOTION). Sound + sight together become
+  stronger alerts (COMBINED, INJURY, FALLING_OBJECT). See docs/SAFETY_FEATURES.md.
 - Alerts pulse a buzzer/LED/vibration motor on a GPIO pin (default BCM 18).
 
 Run on the Pi:     python3 hat_detect.py --no-audio                (camera + GPIO only)
@@ -36,21 +40,29 @@ from datetime import datetime, timezone
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import audio_detect  # noqa: E402
+import motion  # noqa: E402
 import tracking  # noqa: E402
 import vision_detect  # noqa: E402
 
+SEVERITY = {
+    "COMBINED": "high", "INJURY": "high", "FALLING_OBJECT": "high", "PERSON_DOWN": "high",
+    "ALARM": "high", "SIREN": "high", "IMPACT": "high", "FIRE": "high", "GUNSHOT": "high", "SKID": "high",
+    "HORN": "medium", "VOICE": "medium", "GLASS": "medium", "VEHICLE": "medium", "SHARP": "medium",
+    "PERSON_CLOSE": "medium", "MOTION": "medium",
+    "PERSON": "low", "MACHINERY": "low",
+}
 DEFAULTS = {
     "device_id": "hat-01",
     "audio": {"threshold": 0.3, "hop_seconds": 0.5,
-              "alert_groups": ["ALARM", "SIREN", "HORN", "VOICE", "IMPACT", "FIRE"]},
+              "alert_groups": ["ALARM", "SIREN", "HORN", "VOICE", "IMPACT", "FIRE", "GLASS", "GUNSHOT",
+                               "SKID", "MACHINERY"]},
     "video": {"camera_unit": 5, "fps": 5, "threshold": 0.5,
-              "alert_groups": ["PERSON", "VEHICLE", "SHARP"],
-              "tracking": {"enabled": True, "groups": ["PERSON", "VEHICLE"]}},
+              "alert_groups": ["PERSON", "VEHICLE", "SHARP", "MOTION"],
+              "tracking": {"enabled": True, "groups": ["PERSON", "VEHICLE"]},
+              "motion": {"enabled": True}},
     "alerts": {"cooldown_seconds": 3.0, "combine_window_seconds": 2.0,
-               "severity": {"COMBINED": "high", "ALARM": "high", "SIREN": "high", "IMPACT": "high",
-                            "FIRE": "high", "PERSON_DOWN": "high", "HORN": "medium", "VOICE": "medium",
-                            "VEHICLE": "medium", "SHARP": "medium", "PERSON_CLOSE": "medium",
-                            "PERSON": "low"}},
+               "cooldown_overrides": {"MACHINERY": 60.0},
+               "severity": SEVERITY},
     "gpio": {"enabled": True, "pin_bcm": 18, "buzzer": "active", "tone_hz": 2700},
     "event_log": "~/hatdetect/events.jsonl",
 }
@@ -58,8 +70,14 @@ DEFAULTS = {
 PATTERNS = {"high": [(0.12, 0.08)] * 3, "medium": [(0.15, 0.1)] * 2, "low": [(0.08, 0.0)]}
 STATS = {"frames": 0, "windows": 0}   # for the periodic status line
 STATUS_EVERY = 10.0
-COMBINE_AUDIO = {"HORN", "SIREN"}
-COMBINE_VIDEO = {"VEHICLE"}
+# Audio + video confirmation: (sounds, sights, resulting alert, window seconds, label filter
+# for the sound). A matching pair within the window becomes one stronger alert.
+COMBOS = [
+    ({"HORN", "SIREN", "SKID"}, {"VEHICLE"}, "COMBINED", None, None),
+    ({"ALARM"}, {"VEHICLE"}, "COMBINED", None, ("Reversing beeps", "Beep, bleep")),
+    ({"IMPACT", "VOICE"}, {"PERSON_DOWN"}, "INJURY", 8.0, None),
+    ({"IMPACT", "GLASS"}, {"MOTION"}, "FALLING_OBJECT", 3.0, None),
+]
 
 
 def load_config(path):
@@ -140,6 +158,7 @@ class AlertLogic:
     def __init__(self, cfg, buzzer, out):
         self.cfg, self.buzzer, self.out = cfg, buzzer, out
         self.cool = cfg["alerts"]["cooldown_seconds"]
+        self.cool_for = cfg["alerts"].get("cooldown_overrides", {})
         self.window = cfg["alerts"]["combine_window_seconds"]
         self.sev = cfg["alerts"]["severity"]
         self.last_alert = {}            # group -> monotonic time of last alert
@@ -162,7 +181,7 @@ class AlertLogic:
             self.out_broken = True
 
     def _maybe_alert(self, group, ev, t):
-        if t - self.last_alert.get(group, -1e9) >= self.cool:
+        if t - self.last_alert.get(group, -1e9) >= self.cool_for.get(group, self.cool):
             self.last_alert[group] = t
             ev["alerted"] = True
             self.buzzer.beep(self.sev.get(group, "low"))
@@ -184,20 +203,28 @@ class AlertLogic:
             self._combine(source, group, t)
 
     def _combine(self, source, group, t):
-        if source == "audio" and group in COMBINE_AUDIO:
-            others = COMBINE_VIDEO
-        elif source == "video" and group in COMBINE_VIDEO:
-            others = COMBINE_AUDIO
-        else:
-            return
-        for g in others:
-            seen = self.recent.get(g)
-            if seen and t - seen[0] <= self.window:
+        """Turn a sound and a sight close together in time into one confirmed alert."""
+        for sounds, sights, result, window, labels in COMBOS:
+            if source == "audio" and group in sounds:
+                others = sights
+            elif source != "audio" and group in sights:
+                others = sounds
+            else:
+                continue
+            for g in others:
+                seen = self.recent.get(g)
+                if not seen or t - seen[0] > (window or self.window):
+                    continue
                 a, v = (self.recent[group][1], seen[1]) if source == "audio" else (seen[1], self.recent[group][1])
+                if labels and a["label"] not in labels:
+                    continue
                 ev = {"time": now_iso(), "device_id": self.cfg["device_id"], "source": "combined",
                       "label": f"{a['label']} + {v['label']}", "score": round(min(a["score"], v["score"]), 3),
-                      "position": v["position"], "bbox": v["bbox"], "alerted": False, "group": "COMBINED"}
-                self._maybe_alert("COMBINED", ev, t)
+                      "position": v["position"], "bbox": v["bbox"], "alerted": False, "group": result}
+                for k in ("track", "motion", "ttc"):
+                    if k in v:
+                        ev[k] = v[k]
+                self._maybe_alert(result, ev, t)
                 self._emit(ev)
                 return
 
@@ -234,11 +261,14 @@ def video_worker(cfg, logic, stop, model_dir):
     tc = vc.get("tracking", {})
     tracked = set(tc.get("groups", ["PERSON", "VEHICLE"])) if tc.get("enabled", True) else set()
     tracker = tracking.Tracker.from_config(tc)
+    mc = vc.get("motion", {})
+    watch = motion.MotionWatch.from_config(mc) if mc.get("enabled", True) and "MOTION" in groups else None
     for _, img in vision_detect.camera_frames(vc["camera_unit"], vc["fps"], stop=stop):
         STATS["frames"] += 1
         t = time.monotonic()
         width = img.shape[1]
-        dets = [d for d in det.detect(img, vc["threshold"]) if d[3] in groups]
+        all_dets = det.detect(img, vc["threshold"])
+        dets = [d for d in all_dets if d[3] in groups]
 
         # Tracked groups (people, vehicles) alert only when someone new appears or something
         # happens to them (fall, right behind you, closing in fast), not on every frame.
@@ -249,9 +279,18 @@ def video_worker(cfg, logic, stop, model_dir):
             print(f"[track] {kind:<8} {tr.name} #{tr.id} ({tracking.side_of(tr.box, width)})", file=sys.stderr)
             g = tracking.incident_group(kind, tr)
             if g:
+                people = sum(1 for v in visible if v.group == "PERSON")
                 logic.handle("video", g, tr.name, tr.score, position_of(tr.box, width), list(tr.box),
-                             extra={"track": tr.id, "incident": kind})
+                             extra={"track": tr.id, "incident": kind, "motion": tr.motion,
+                                    "ttc": tr.ttc, "people": people})
                 done.add(tr.group)
+
+        # Sudden movement the detector has no label for (falling load, swinging object, ...).
+        if watch:
+            m = watch.update(img, t, [d[2] for d in all_dets])
+            if m:
+                print(f"[motion] {m['label']} ({m['position']}, {m['score']:.2f})", file=sys.stderr)
+                logic.handle("video", "MOTION", m["label"], m["score"], m["position"], m["bbox"])
 
         # Everything else is logged as before (one event per group per frame); tracked groups
         # never alert from here.
