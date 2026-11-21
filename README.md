@@ -3,8 +3,9 @@
 Hack Western 2026 · QNX track
 
 A wearable hat that **hears** important sounds (YAMNet) and **sees** important
-objects (EfficientDet-Lite0) and alerts the wearer. Everything runs on a
-Raspberry Pi running QNX, using TensorFlow Lite.
+objects (EfficientDet-Lite0) and alerts the wearer. All detection and alerts run
+on a Raspberry Pi 5 running QNX, using TensorFlow Lite (`tflite-runtime` from
+oss.qnx.com).
 
 ```
 USB mic ──► io-audio ──► YAMNet ─────────┐
