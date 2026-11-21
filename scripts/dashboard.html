@@ -189,7 +189,8 @@
 const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const SEV = ["high", "medium", "low"];
 const NAMES = { COMBINED: "Horn + vehicle", ALARM: "Alarm", SIREN: "Siren", IMPACT: "Impact / crash", FIRE: "Fire",
-                HORN: "Horn", VOICE: "Shouting", VEHICLE: "Vehicle", SHARP: "Sharp object", PERSON: "Person" };
+                HORN: "Horn", VOICE: "Shouting", VEHICLE: "Vehicle", SHARP: "Sharp object", PERSON: "Person",
+                PERSON_DOWN: "Person down", PERSON_CLOSE: "Person close behind" };
 const name = h => NAMES[h] || h;
 let state = { range: localGet("range") || "8h", device: "", sim: localGet("sim") === "1", view: "site" };
 let charts = {}, lastOk = 0, site = null, loading = 0;

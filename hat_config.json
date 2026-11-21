@@ -11,7 +11,17 @@
     "camera_unit": 5,
     "fps": 5,
     "threshold": 0.5,
-    "alert_groups": ["PERSON", "VEHICLE", "SHARP"]
+    "alert_groups": ["PERSON", "VEHICLE", "SHARP"],
+    "tracking": {
+      "enabled": true,
+      "groups": ["PERSON", "VEHICLE"],
+      "memory_s": 120,
+      "reid_min": 0.6,
+      "close_area": 0.35,
+      "approach_ratio": 1.8,
+      "stand_aspect": 1.3,
+      "down_aspect": 0.9
+    }
   },
 
   "alerts": {
@@ -19,8 +29,9 @@
     "combine_window_seconds": 2.0,
     "severity": {
       "COMBINED": "high", "ALARM": "high", "SIREN": "high", "IMPACT": "high", "FIRE": "high",
+      "PERSON_DOWN": "high",
       "HORN": "medium", "VOICE": "medium", "VEHICLE": "medium", "SHARP": "medium",
-      "PERSON": "low"
+      "PERSON_CLOSE": "medium", "PERSON": "low"
     }
   },
 

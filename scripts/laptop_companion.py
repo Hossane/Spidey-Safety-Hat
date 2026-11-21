@@ -52,6 +52,13 @@ def phrase(ev):
         return AUDIO_PHRASES.get(g, label)
     if g == "PERSON":
         return f"Person {side}".strip()
+    if g == "PERSON_DOWN":
+        return f"Warning! Person down {side}".strip()
+    if g == "PERSON_CLOSE":
+        return f"Person right behind you {side}".strip() if ev.get("incident") == "CLOSE" \
+            else f"Person approaching fast {side}".strip()
+    if g == "VEHICLE" and ev.get("incident") in ("CLOSE", "APPROACH"):
+        return f"{label.capitalize()} closing in {side}".strip()
     return f"{label.capitalize()} {side}".strip()
 
 

@@ -29,7 +29,7 @@ SCHEMA = os.path.join(ROOT, "db", "schema.sql")
 
 # Same severities as hat_config.json; used when an event doesn't carry one.
 SEVERITY = {"COMBINED": "high", "ALARM": "high", "SIREN": "high", "IMPACT": "high", "FIRE": "high",
-            "HORN": "medium", "VOICE": "medium", "VEHICLE": "medium", "SHARP": "medium", "PERSON": "low"}
+            "PERSON_DOWN": "high", "PERSON_CLOSE": "medium", "HORN": "medium", "VOICE": "medium", "VEHICLE": "medium", "SHARP": "medium", "PERSON": "low"}
 
 INSERT_SQL = """
 INSERT INTO detections (time, device_id, source, hazard, severity, label, score, position, bbox, alerted)
