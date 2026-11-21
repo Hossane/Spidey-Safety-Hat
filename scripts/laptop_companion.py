@@ -6,6 +6,8 @@ so the laptop lends both:
   - reads the `EVENT {json}` lines that come back, and for each alert plays a warning tone
     and speaks it ("Siren", "Car on your left") on the default speaker: pair the JBL with
     the laptop over Bluetooth and make it the default output device.
+  - stores every event in Tiger Cloud (scripts/tiger_bridge.py) when TIGER_DATABASE_URL is
+    set in .env; events are buffered locally if the connection drops.
 
 Run from the project root on the laptop (needs: pip install sounddevice numpy):
     python scripts/laptop_companion.py               # mic + camera + speaker
@@ -111,6 +113,7 @@ def main():
     ap.add_argument("--mic", type=int, help="input device index (see python -m sounddevice)")
     ap.add_argument("--quiet-events", action="store_true", help="print alerts only, not every event")
     ap.add_argument("--test-speaker", action="store_true", help="play one sample alert and exit")
+    ap.add_argument("--no-db", action="store_true", help="don't store events in Tiger Cloud")
     args = ap.parse_args()
 
     out = sd.query_devices(kind="output")
@@ -124,6 +127,15 @@ def main():
         time.sleep(4)
         speaker.close()
         return
+
+    tiger = None
+    if not args.no_db:
+        import tiger_bridge
+        url = tiger_bridge.database_url()
+        if url:
+            tiger = tiger_bridge.TigerWriter(url, log=lambda m: print(m, file=sys.stderr))
+        else:
+            print("[tiger] TIGER_DATABASE_URL not set in .env; events won't be stored", file=sys.stderr)
 
     remote = f"cd {args.remote_dir} && python3 -u hat_detect.py" + (" --no-audio --stop-on-stdin-eof" if args.no_mic else "")
     ssh = subprocess.Popen(["ssh", "-o", "BatchMode=yes", args.host, remote],
@@ -139,6 +151,8 @@ def main():
                 ev = json.loads(line[6:])
             except json.JSONDecodeError:
                 continue
+            if tiger:
+                tiger.add(ev)
             if ev.get("alerted"):
                 text = phrase(ev)
                 print(f"!! ALERT {ev['source']:<8} {ev['label']} {ev['score']:.2f} "
@@ -186,6 +200,8 @@ def main():
             ssh.terminate()
         reader.join(timeout=2)
         speaker.close()
+        if tiger:
+            tiger.close()
 
 
 if __name__ == "__main__":

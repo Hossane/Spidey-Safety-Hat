@@ -19,3 +19,8 @@ venv/
 
 # Test inputs (regenerate with scripts/make_samples.py)
 samples/
+
+# Secrets: database connection string
+.env
+# Bridge buffer when Tiger Cloud is unreachable
+.tiger_spool.jsonl
