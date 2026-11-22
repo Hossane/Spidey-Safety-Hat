@@ -10,12 +10,15 @@ speaker (the JBL). Settings are in `hat_config.json`.
 | Tracking (`tracking.py`) | Each person or vehicle alerts once. Someone who leaves and comes back is recognised by their clothing colours. | `PERSON`, `VEHICLE` |
 | Speed and direction | Every track is labelled approaching, moving away, crossing, still or steady. For anything approaching, the hat estimates the time to reach the wearer from how fast its box grows. Vehicles moving away are never announced. | `motion` and `ttc` on events |
 | Closing in | A box grows fast, or the time to reach is under 3 s (`ttc_alert_s`). | `PERSON_CLOSE` / `VEHICLE` |
-| Fall seen | A full-body upright shape turns wide, low in the frame. | `PERSON_DOWN` |
+| Fall seen | An upright shape turns wide, low in the frame, and stays that way. | `PERSON_DOWN` |
 | Lying still | A person lying on the ground and not moving for 5 s (`lying_still_s`), even if the fall wasn't seen. | `PERSON_DOWN` |
 | Sudden movement (`motion.py`) | A burst of movement the object model can't label, such as a falling load or a swinging hook. Movement of tracked people and vehicles is ignored, and so is the whole view moving (the wearer turning their head). | `MOTION` |
 
-"Person down" only uses whole-body boxes in the lower half of the frame. Partial bodies cut
-off by the frame edge (a head and shoulders close to the camera) don't count.
+"Person down" needs a wide box low in the frame, held for 8 frames (`down_frames`, about
+2–3 s at the Pi's frame rate) so a quick crouch doesn't count. The camera is close, so a lying
+body may run off one side or the bottom of the view. These don't count: a box touching the
+top edge (a head too close to judge), a box touching both sides (a torso filling the view),
+and a thin strip along the bottom edge (head and shoulders).
 
 ## Mic (YAMNet on the Pi)
 
@@ -37,9 +40,12 @@ A smoke alarm plus a car is not combined, because only reversing beeps count for
 ## Voice commands (laptop, offline)
 
 `scripts/voice_commands.py` uses Windows' built-in speech recogniser with a fixed list of
-phrases.
+phrases. The list also has decoys that sound like the commands ("hello", "kelp", "conference"),
+so everyday speech matches a decoy, which is ignored, instead of being forced onto a command.
 
-- **"I need help"**, **"help help"**, **"mayday"** or **"emergency"**: `SOS` event, red banner on the dashboard.
+- **"Help help"** or **"I need help"**: `SOS` event, red banner on the dashboard. A plain
+  "help" or "help me" doesn't count: the recogniser confuses it with "hello". "Mayday" and
+  "emergency" were dropped because they misfired.
 - **"Call nine one one"**: the hat replies "Say confirm to call nine one one, or say cancel".
   - **"Confirm"** within 10 s: a **simulated** 911 call. The terminal prints the message that
     would go to dispatch (worker, hat, zone, recent alerts). An `EMERGENCY_CALL` event shows
