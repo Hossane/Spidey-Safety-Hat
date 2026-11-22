@@ -11,6 +11,21 @@ history, analytics and a live dashboard.
 > **Scope:** video and audio detection only. Anything else from the original
 > hat idea is out of scope for this build.
 
+> **This is the plan written before the hackathon.** It's kept as a record. For what was
+> built, see the [README](../README.md) and [Safety features](SAFETY_FEATURES.md). The main
+> differences:
+> - **Purpose:** the hat became a construction-site safety hat. It watches behind the
+>   wearer and listens for site hazards.
+> - **Audio:** QNX's USB audio driver rejected the webcam mic, so the laptop streams its
+>   mic to the Pi over SSH. Detection still runs on the Pi.
+> - **Alerts:** the QNX image has no Bluetooth, so alerts are spoken on the laptop's
+>   speaker (a JBL), plus a buzzer on a GPIO pin.
+> - **Bridge:** there's no HTTP or UDP bridge. The Pi prints `EVENT {json}` lines over the
+>   same SSH connection, and the laptop inserts them into Tiger Cloud.
+> - **Beyond the plan:** tracking, person down, motion-aware alerts, sound-and-sight
+>   combinations, voice SOS with a simulated 911 call, a site dashboard with per-worker
+>   drill-down, insight cards, a supervisor activity log and a simulated crew.
+
 ## 0. QNX challenge rules
 
 **Hard requirements**
@@ -161,16 +176,16 @@ Pi (QNX) ──JSON over Wi-Fi──► bridge (laptop, Python) ──SQL/TLS─
 A continuous aggregate (`detections_per_minute`) holds counts per minute by
 `source` and `label` for the dashboard.
 
-## 7. Open decisions (team)
+## 7. Decisions (made during the hackathon)
 
-- [ ] What exactly does the hat do, and who is it for? (accessibility for deaf / blind users, safety, other)
-- [ ] Bridge transport: HTTP POST or UDP
-- [ ] Dashboard: Grafana (connects to Postgres directly) or a custom web page
-- [ ] Final list of target sounds
-- [ ] Final list of target objects
-- [ ] Alert output: vibration, buzzer, spoken alert, or screen
-- [ ] Camera: USB webcam or Pi Camera Module 3
-- [ ] App language: **C++** (direct access to QNX audio and camera APIs) or **Python** (faster to write with `python3-tflite-runtime`, but check that mic and camera are reachable from Python on QNX)
+- [x] **What the hat does:** a construction-site safety hat that warns the wearer about people and vehicles behind them, co-workers who are down, and hazard sounds.
+- [x] **Bridge transport:** neither HTTP nor UDP. `EVENT {json}` lines come back over the SSH connection the laptop uses to start the hat.
+- [x] **Dashboard:** a custom web page (`scripts/dashboard.py`) reading Tiger Cloud.
+- [x] **Target sounds:** alarm, siren, horn, shouting, impact, fire, glass, gunshot, skid, machinery (see [Safety features](SAFETY_FEATURES.md#mic-yamnet-on-the-pi)).
+- [x] **Target objects:** people, vehicles (car, truck, bus, motorcycle, bicycle, train), knives and scissors.
+- [x] **Alert output:** spoken alerts with a warning tone on the laptop's Bluetooth speaker, and a GPIO buzzer on the Pi.
+- [x] **Camera:** USB webcam, through the QNX Camera service (unit 5).
+- [x] **App language:** Python 3 with `python3-tflite-runtime` and numpy on the Pi.
 
 ## 8. Before the hackathon (setup checklist)
 

@@ -99,11 +99,12 @@ curl -L -o coco_labels.txt "https://raw.githubusercontent.com/google-coral/test_
 From the project root on your laptop:
 
 ```bash
-ssh qnxpi "mkdir -p ~/models"
-scp models/*.tflite models/*.csv models/*.txt qnxpi:models/
+ssh qnxpi-eth "mkdir -p ~/models"
+scp models/*.tflite models/*.csv models/*.txt qnxpi-eth:models/
 ```
 
-`qnxpi` is a `~/.ssh/config` entry with `Ciphers aes128-ctr` and `MACs hmac-sha2-256`. Without those,
+`qnxpi-eth` (Ethernet cable) and `qnxpi` (Wi-Fi) are `~/.ssh/config` entries with `Ciphers aes128-ctr` and
+`MACs hmac-sha2-256`; the [README](../README.md#running-it) shows both. Without those settings,
 Windows OpenSSH fails with "Corrupted MAC on input" (plain scp: `scp -c aes128-ctr -o MACs=hmac-sha2-256 ...`).
 
 ## Runtime on the Pi (QNX 8.0)
@@ -116,3 +117,10 @@ sudo apk add python3-tflite-runtime python3-numpy   # tflite_runtime 2.21.0, num
 ```
 
 Measured on the Pi 5 (XNNPACK, 4 threads): YAMNet ≈ 6 ms per window; EfficientDet-Lite0 ≈ 55 ms per frame (≈ 85 ms including resize).
+
+Check both models on the Pi with the test files in `samples/`:
+
+```bash
+python3 audio_detect.py samples/alarm_beeps.wav     # expect ALARM
+python3 vision_detect.py samples/street.ppm         # expect people and vehicles
+```
