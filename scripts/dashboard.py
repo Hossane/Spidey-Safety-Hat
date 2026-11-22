@@ -104,6 +104,7 @@ def gather(db, rng, dev, sim=False):
         GROUP BY device_id, w.name ORDER BY w.name NULLS LAST, device_id""", p)
     worker = db.query("SELECT device_id, name, role, zone, simulated FROM workers WHERE device_id = %(dev)s",
                       p) if dev else []
+    incident_rows = incidents(db, p, since) if dev else []
 
     buckets = sorted({r[0] for r in timeline})
     series = {s: [0] * len(buckets) for s in ("high", "medium", "low")}
@@ -130,7 +131,52 @@ def gather(db, rng, dev, sim=False):
                     "simulated": worker[0][4]} if worker else
                    ({"id": dev, "name": dev, "role": "Unregistered hat", "zone": "Unassigned",
                      "simulated": dev.startswith("sim-")} if dev else None)),
+        "incidents": incident_rows,
+        "emergencies": emergencies(db, p),
     }
+
+
+SEV_RANK = "CASE severity WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END"
+
+
+def incidents(db, p, since, gap_s=20, limit=12):
+    """One worker's alerts grouped into incidents: alerts less than gap_s apart (camera and
+    mic together) belong to the same incident. Newest first."""
+    rows = db.query(f"""
+        WITH a AS (
+            SELECT time, hazard, severity, label, source, position,
+                   CASE WHEN lag(time) OVER (ORDER BY time) IS NULL
+                          OR time - lag(time) OVER (ORDER BY time) > make_interval(secs => {gap_s})
+                        THEN 1 ELSE 0 END AS brk
+            FROM detections WHERE alerted AND device_id = %(dev)s AND time > {since}),
+        b AS (SELECT *, sum(brk) OVER (ORDER BY time) AS inc FROM a)
+        SELECT min(time), max(time), count(*),
+               (array_agg(hazard ORDER BY {SEV_RANK}, time))[1],
+               (array_agg(severity ORDER BY {SEV_RANK}, time))[1],
+               json_agg(json_build_object('time', time, 'hazard', hazard, 'severity', severity,
+                                          'label', label, 'source', source, 'position', position) ORDER BY time)
+        FROM b GROUP BY inc ORDER BY min(time) DESC LIMIT {limit}""", p)
+    out = []
+    for start, end, n, hazard, severity, items in rows:
+        sources = {("mic" if i["source"] == "audio" else "camera" if i["source"] == "video" else "camera + mic")
+                   for i in items}
+        out.append({"start": iso(start), "end": iso(end), "seconds": round((end - start).total_seconds()),
+                    "alerts": n, "hazard": hazard, "severity": severity,
+                    "sources": "camera + mic" if len(sources) > 1 or "camera + mic" in sources else sources.pop(),
+                    "items": items[:10], "more": max(0, n - 10)})
+    return out
+
+
+def emergencies(db, p, minutes=15):
+    """SOS and (simulated) 911 calls in the last few minutes, for the red banner."""
+    rows = db.query(f"""
+        SELECT d.time, device_id, coalesce(w.name, device_id), coalesce(w.zone, 'Unassigned'), d.hazard, d.label
+        FROM detections d LEFT JOIN workers w USING (device_id)
+        WHERE d.hazard IN ('SOS', 'EMERGENCY_CALL') AND d.time > now() - interval '{minutes} minutes'
+          AND {SIM} AND (%(dev)s::text IS NULL OR device_id = %(dev)s)
+        ORDER BY d.time DESC LIMIT 5""", {"sim": p.get("sim", False), "dev": p.get("dev")})
+    return [{"time": iso(r[0]), "device": r[1], "name": r[2], "zone": r[3], "hazard": r[4], "label": r[5]}
+            for r in rows]
 
 
 def overview(db, rng, sim=False):
@@ -206,6 +252,7 @@ def overview(db, rng, sim=False):
         "timeline": {"labels": [b.astimezone().strftime(fmt) for b in buckets], "series": series},
         "zones": sorted(zmap.values(), key=lambda z: -(5 * z["high"] + 2 * z["medium"] + z["low"])),
         "workers": workers,
+        "emergencies": emergencies(db, p),
     }
 
 

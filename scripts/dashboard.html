@@ -61,6 +61,21 @@
   .feed .t { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
   .feed .what { font-weight: 600; } .feed .ctl { color: var(--muted); font-size: 12px; }
   .empty { color: var(--muted); padding: 20px 0; text-align: center; }
+  .sos { grid-column: 1 / -1; background: var(--high); color: #fff; border-radius: 10px; padding: 12px 16px;
+         display: grid; gap: 6px; animation: pulse 1.6s ease-in-out infinite; }
+  .sos b { font-size: 15px; letter-spacing: .3px; } .sos .m { font-size: 13px; opacity: .95; }
+  @keyframes pulse { 50% { box-shadow: 0 0 0 6px color-mix(in srgb, var(--high) 30%, transparent); } }
+  .inc { display: grid; grid-template-columns: 92px 1fr; gap: 14px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+  .inc:last-child { border-bottom: 0; }
+  .inc .when { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .inc .when b { display: block; color: var(--text); font-size: 13px; }
+  .inc .head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-weight: 600; }
+  .chip { font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 999px; background: var(--bg); color: var(--muted); border: 1px solid var(--line); }
+  .steps { list-style: none; margin: 8px 0 0; padding: 0 0 0 12px; border-left: 2px solid var(--line); display: grid; gap: 4px; }
+  .steps li { font-size: 12px; color: var(--muted); position: relative; }
+  .steps li::before { content: ""; position: absolute; left: -17px; top: 5px; width: 8px; height: 8px; border-radius: 50%; background: var(--line); }
+  .steps li.high::before { background: var(--high); } .steps li.medium::before { background: var(--medium); } .steps li.low::before { background: var(--low); }
+  .steps li b { color: var(--text); font-weight: 600; }
   .banner { grid-column: 1 / -1; background: var(--high-bg); color: var(--high); border-radius: 10px; padding: 10px 14px; display: none; }
   .tablewrap { overflow-x: auto; }
   nav.tabs { display: inline-flex; gap: 4px; }
@@ -116,6 +131,7 @@
 
 <main id="site">
   <div class="banner" id="banner-site"></div>
+  <div class="sos" id="sos-site" hidden></div>
   <div class="note" id="simnote" hidden></div>
   <section class="kpis">
     <div class="card kpi"><h2>Workers</h2><div class="v" id="o-workers">–</div><div class="s" id="o-workers-s"></div></div>
@@ -147,6 +163,7 @@
 
 <main id="worker" hidden>
   <div class="banner" id="banner"></div>
+  <div class="sos" id="sos-worker" hidden></div>
   <section class="card person" id="person"></section>
   <section class="kpis">
     <div class="card kpi"><h2>Detections</h2><div class="v" id="k-det">–</div><div class="s" id="k-det-s"></div></div>
@@ -177,6 +194,11 @@
   </section>
 
   <section class="card span12">
+    <h2>Incident timeline · camera and mic alerts grouped into incidents</h2>
+    <div id="incidents"></div>
+  </section>
+
+  <section class="card span12">
     <h2>Hazard register</h2>
     <div class="tablewrap"><table>
       <thead><tr><th>Hazard</th><th>Severity</th><th>What it is</th><th class="num">Detections</th>
@@ -190,7 +212,10 @@ const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).
 const SEV = ["high", "medium", "low"];
 const NAMES = { COMBINED: "Horn + vehicle", ALARM: "Alarm", SIREN: "Siren", IMPACT: "Impact / crash", FIRE: "Fire",
                 HORN: "Horn", VOICE: "Shouting", VEHICLE: "Vehicle", SHARP: "Sharp object", PERSON: "Person",
-                PERSON_DOWN: "Person down", PERSON_CLOSE: "Person close behind" };
+                PERSON_DOWN: "Person down", PERSON_CLOSE: "Person close behind", INJURY: "Possible injury",
+                FALLING_OBJECT: "Falling object", GUNSHOT: "Gunshot", SKID: "Tires screeching", SOS: "SOS (voice)",
+                EMERGENCY_CALL: "911 call (simulated)", GLASS: "Glass breaking", MOTION: "Sudden movement",
+                MACHINERY: "Heavy machinery" };
 const name = h => NAMES[h] || h;
 let state = { range: localGet("range") || "8h", device: "", sim: localGet("sim") === "1", view: "site" };
 let charts = {}, lastOk = 0, site = null, loading = 0;
@@ -246,7 +271,35 @@ function spark(values, color) {
       width="${Math.max(1, bw - 1).toFixed(1)}" height="${((v / max) * h).toFixed(1)}" fill="${color}" rx="1"/>` : "").join("") + "</svg>";
 }
 
+function renderSos(id, list) {
+  const el = document.getElementById(id);
+  el.hidden = !list || !list.length;
+  if (el.hidden) return;
+  el.innerHTML = list.map(e => {
+    const call = e.hazard === "EMERGENCY_CALL";
+    const title = call ? "SIMULATED 911 CALL" : "SOS: WORKER ASKED FOR HELP";
+    const msg = call ? e.label.replace(/^SIMULATED 911 call:\s*/, "") : `${e.label}`;
+    return `<div><b>${title} · ${esc(e.name)} (${esc(e.device)}) · ${esc(e.zone)} · ${ago(e.time)}</b>
+      <div class="m">${esc(msg)}${call ? " (proof of concept: no real call was placed)" : ""}</div></div>`;
+  }).join("");
+}
+
+function renderIncidents(list) {
+  const el = document.getElementById("incidents");
+  if (!list || !list.length) { el.innerHTML = `<div class="empty">No incidents in this period</div>`; return; }
+  el.innerHTML = list.map(i => `
+    <div class="inc">
+      <div class="when"><b>${clock(i.start)}</b>${i.seconds ? i.seconds + " s" : "instant"} · ${i.alerts} alert${i.alerts === 1 ? "" : "s"}<br>${ago(i.start)}</div>
+      <div>
+        <div class="head">${sevPill(i.severity)} ${esc(name(i.hazard))} <span class="chip">${esc(i.sources)}</span></div>
+        <ul class="steps">${i.items.map(x => `<li class="${x.severity}"><b>${clock(x.time)}</b> ${x.source === "audio" ? "mic" : x.source === "video" ? "camera" : "camera + mic"} · ${esc(name(x.hazard))}${x.position ? " · " + esc(x.position) : ""} <span>(${esc(x.label)})</span></li>`).join("")}
+          ${i.more ? `<li>+ ${i.more} more</li>` : ""}</ul>
+      </div>
+    </div>`).join("");
+}
+
 function renderSite(d) {
+  renderSos("sos-site", d.emergencies);
   site = d;
   const k = d.kpis, live = d.workers.filter(w => !w.simulated).length, sims = d.workers.length - live;
   document.getElementById("o-workers").textContent = k.workers;
@@ -312,6 +365,8 @@ function axes(stacked, horizontal) {
 }
 
 function render(d) {
+  renderSos("sos-worker", d.emergencies);
+  renderIncidents(d.incidents);
   const k = d.kpis;
   document.getElementById("k-det").textContent = k.detections.toLocaleString();
   document.getElementById("k-det-s").textContent = `${k.devices} hat${k.devices === 1 ? "" : "s"} reporting · last ${ago(k.last_event)}`;

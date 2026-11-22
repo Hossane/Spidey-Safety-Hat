@@ -37,13 +37,17 @@ SAFETY = {
               "Fire engine, fire truck (siren)"],
     "HORN": ["Vehicle horn, car horn, honking", "Air horn, truck horn", "Foghorn"],
     "VOICE": ["Shout", "Yell", "Screaming", "Children shouting", "Crying, sobbing", "Groan"],
-    "IMPACT": ["Smash, crash", "Breaking", "Shatter", "Glass", "Explosion", "Bang",
-               "Thump, thud", "Crack", "Gunshot, gunfire"],
+    "IMPACT": ["Smash, crash", "Breaking", "Explosion", "Bang", "Boom", "Slam",
+               "Thump, thud", "Crack"],
+    "GLASS": ["Glass", "Shatter"],
+    "GUNSHOT": ["Gunshot, gunfire", "Machine gun", "Fusillade", "Artillery fire"],
+    "SKID": ["Skidding", "Tire squeal"],
     "FIRE": ["Fire", "Crackle"],
+    # Heavy tools nearby: alerts with a long cooldown (hat_config.json), as a reminder.
+    "MACHINERY": ["Chainsaw", "Jackhammer", "Power tool", "Drill", "Sawing", "Sanding", "Lawn mower"],
 }
 # Expected on a construction site: reported, but never raises an alert on its own.
-NORMAL = ["Jackhammer", "Drill", "Power tool", "Hammer", "Sawing", "Chainsaw", "Tools",
-          "Engine", "Heavy engine (low frequency)", "Medium engine (mid frequency)",
+NORMAL = ["Hammer", "Tools", "Engine", "Heavy engine (low frequency)", "Medium engine (mid frequency)",
           "Engine starting", "Speech", "Silence"]
 
 

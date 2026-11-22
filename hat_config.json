@@ -4,14 +4,15 @@
   "audio": {
     "threshold": 0.3,
     "hop_seconds": 0.5,
-    "alert_groups": ["ALARM", "SIREN", "HORN", "VOICE", "IMPACT", "FIRE"]
+    "alert_groups": ["ALARM", "SIREN", "HORN", "VOICE", "IMPACT", "FIRE", "GLASS", "GUNSHOT", "SKID",
+                     "MACHINERY"]
   },
 
   "video": {
     "camera_unit": 5,
     "fps": 5,
     "threshold": 0.5,
-    "alert_groups": ["PERSON", "VEHICLE", "SHARP"],
+    "alert_groups": ["PERSON", "VEHICLE", "SHARP", "MOTION"],
     "tracking": {
       "enabled": true,
       "groups": ["PERSON", "VEHICLE"],
@@ -19,19 +20,28 @@
       "reid_min": 0.6,
       "close_area": 0.35,
       "approach_ratio": 1.8,
+      "ttc_alert_s": 3.0,
       "stand_aspect": 1.3,
-      "down_aspect": 0.9
+      "down_aspect": 0.9,
+      "lying_still_s": 5.0
+    },
+    "motion": {
+      "enabled": true,
+      "burst": 0.06,
+      "ego": 0.45
     }
   },
 
   "alerts": {
     "cooldown_seconds": 3.0,
     "combine_window_seconds": 2.0,
+    "cooldown_overrides": {"MACHINERY": 60.0},
     "severity": {
-      "COMBINED": "high", "ALARM": "high", "SIREN": "high", "IMPACT": "high", "FIRE": "high",
-      "PERSON_DOWN": "high",
-      "HORN": "medium", "VOICE": "medium", "VEHICLE": "medium", "SHARP": "medium",
-      "PERSON_CLOSE": "medium", "PERSON": "low"
+      "COMBINED": "high", "INJURY": "high", "FALLING_OBJECT": "high", "PERSON_DOWN": "high",
+      "ALARM": "high", "SIREN": "high", "IMPACT": "high", "FIRE": "high", "GUNSHOT": "high", "SKID": "high",
+      "HORN": "medium", "VOICE": "medium", "GLASS": "medium", "VEHICLE": "medium", "SHARP": "medium",
+      "PERSON_CLOSE": "medium", "MOTION": "medium",
+      "PERSON": "low", "MACHINERY": "low"
     }
   },
 
