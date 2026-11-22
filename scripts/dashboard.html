@@ -90,7 +90,52 @@
   .person .av { width: 44px; height: 44px; border-radius: 50%; background: var(--text); color: var(--panel); display: grid; place-items: center; font-weight: 700; }
   .person .nm { font-size: 20px; font-weight: 650; } .person .meta { color: var(--muted); }
   .person a { margin-left: auto; color: var(--low); text-decoration: none; font-weight: 600; }
+
+  .activity-layout { display:grid; grid-template-columns:minmax(280px,.85fr) minmax(0,1.5fr); gap:16px; align-items:start; }
+  .activity-form { display:grid; gap:12px; }
+  .activity-form label { display:grid; gap:5px; color:var(--muted); font-size:12px; font-weight:650; }
+  .activity-form input, .activity-form select, .activity-form textarea, .activity-tools input, .activity-tools select {
+    width:100%; border:1px solid var(--line); border-radius:8px; padding:9px 10px;
+    color:var(--text); background:var(--panel); font:inherit;
+  }
+  .activity-form textarea { min-height:90px; resize:vertical; }
+  .activity-form .form-row { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .activity-form button, .activity-entry button { border:1px solid var(--line); border-radius:8px; padding:9px 12px; background:var(--text); color:var(--panel); cursor:pointer; font:inherit; font-weight:650; }
+  .activity-form button:disabled, .activity-entry button:disabled { opacity:.55; cursor:wait; }
+  .activity-tools { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px; }
+  .activity-tools select { width:auto; min-width:140px; }
+  .activity-entry { border:1px solid var(--line); border-radius:10px; padding:13px; margin-bottom:10px; }
+  .activity-entry-head { display:flex; justify-content:space-between; gap:12px; align-items:flex-start; flex-wrap:wrap; }
+  .activity-entry h3 { margin:0; font-size:14px; }
+  .activity-meta, .activity-detail, .activity-history { color:var(--muted); font-size:12px; }
+  .activity-detail { margin-top:8px; white-space:pre-wrap; color:var(--text); }
+  .activity-tags { display:flex; gap:6px; flex-wrap:wrap; margin-top:7px; }
+  .activity-tag { border:1px solid var(--line); border-radius:999px; padding:2px 8px; color:var(--muted); font-size:11px; }
+  .activity-status { font-size:11px; font-weight:700; border-radius:999px; padding:3px 9px; background:var(--low-bg); color:var(--low); }
+  .activity-status.open { background:var(--high-bg); color:var(--high); }
+  .activity-status.in-progress { background:var(--medium-bg); color:var(--medium); }
+  .activity-history { border-top:1px solid var(--line); margin-top:10px; padding-top:8px; }
+  .activity-history summary { cursor:pointer; font-weight:650; }
+  .activity-history ul { margin:8px 0 0; padding-left:18px; }
+  .activity-history li { margin:5px 0; }
+  .activity-update { display:grid; grid-template-columns:minmax(110px, .6fr) minmax(150px,1fr) auto; gap:7px; margin-top:10px; }
+  .activity-update select, .activity-update input { min-width:0; border:1px solid var(--line); border-radius:7px; padding:7px; background:var(--panel); color:var(--text); font:inherit; }
+  .activity-update button { padding:7px 9px; font-size:12px; }
+  .form-message { min-height:18px; color:var(--muted); font-size:12px; }
+  .form-message.error { color:var(--high); }
+  @media (max-width:850px) { .activity-layout { grid-template-columns:1fr; } }
+  @media (max-width:600px) { .activity-form .form-row, .activity-update { grid-template-columns:1fr; } }
+
   [hidden] { display: none !important; }
+  .insights { grid-column: 1 / -1; }
+  .insight-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+  .insight { border: 1px solid var(--line); border-radius: 10px; padding: 13px 14px; min-width: 0; }
+  .insight .eyebrow { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .55px; font-weight: 650; }
+  .insight .headline { font-size: 16px; font-weight: 650; margin: 5px 0; }
+  .insight p { color: var(--muted); font-size: 12px; margin: 0; }
+  .insight-foot { color: var(--muted); font-size: 11px; margin-top: 10px; }
+  .insight.empty-state { color: var(--muted); }
+  @media (max-width: 1000px) { .insight-grid { grid-template-columns: 1fr; } }
   @media (max-width: 1000px) {
     .kpis { grid-template-columns: repeat(2, 1fr); }
     .span8, .span4 { grid-column: 1 / -1; }
@@ -101,7 +146,7 @@
 <body>
 <header>
   <h1>Site Safety · Hazard Monitor <small>Hat Detect on QNX · Tiger Cloud</small></h1>
-  <nav class="tabs"><a href="#" id="tab-site">Site overview</a><a href="#" id="tab-worker">Worker</a></nav>
+  <nav class="tabs"><a href="#" id="tab-site">Site overview</a><a href="#" id="tab-worker">Worker</a><a href="#" id="tab-activity">Activity log</a></nav>
   <div class="controls">
     <div class="seg" id="range">
       <button data-r="1h">1 h</button><button data-r="8h">Shift (8 h)</button>
@@ -123,6 +168,12 @@
     <div class="card kpi alarm"><h2>High-severity alerts</h2><div class="v" id="o-high">–</div><div class="s">alarms, sirens, impacts, horn + vehicle</div></div>
     <div class="card kpi"><h2>Workers with high alerts</h2><div class="v" id="o-risk">–</div><div class="s" id="o-risk-s"></div></div>
     <div class="card kpi"><h2>Stored in Tiger</h2><div class="v" id="o-rows">–</div><div class="s" id="o-rows-s"></div></div>
+  </section>
+
+  <section class="card insights">
+    <div class="cardhead"><h2>What the data suggests</h2><span class="insight-foot">Patterns in recorded alerts · selected time range</span></div>
+    <div class="insight-grid" id="site-insights"></div>
+    <div class="insight-foot">These are descriptive patterns in logged alerts, not proof of unsafe conditions or causal explanations. Repeated frame-level detections are not deduplicated into unique encounters.</div>
   </section>
 
   <section class="card span8">
@@ -148,6 +199,11 @@
 <main id="worker" hidden>
   <div class="banner" id="banner"></div>
   <section class="card person" id="person"></section>
+  <section class="card insights">
+    <div class="cardhead"><h2>Worker-level observations</h2><span class="insight-foot">Based on this hat's recorded alerts</span></div>
+    <div class="insight-grid" id="worker-insights"></div>
+    <div class="insight-foot">Camera positions are image-relative (left / centre / right), not physical distance. Counts may include repeated detections of the same object.</div>
+  </section>
   <section class="kpis">
     <div class="card kpi"><h2>Detections</h2><div class="v" id="k-det">–</div><div class="s" id="k-det-s"></div></div>
     <div class="card kpi"><h2>Alerts to wearers</h2><div class="v" id="k-alerts">–</div><div class="s">after 3 s cooldown</div></div>
@@ -185,6 +241,52 @@
     </table></div>
   </section>
 </main>
+
+<main id="activity" hidden>
+  <div class="banner" id="banner-activity"></div>
+  <section class="card span12">
+    <div class="cardhead"><h2>Supervisor activity log</h2><span class="activity-meta">Record inspections, corrective actions and follow-ups</span></div>
+    <p class="activity-meta">Entries are saved to Tiger Data and shared through this dashboard server. They are supervisor-entered records, not automatically verified outcomes.</p>
+  </section>
+  <div class="activity-layout span12">
+    <section class="card">
+      <h2>Record an update</h2>
+      <form id="activity-form" class="activity-form">
+        <label>Supervisor name *<input id="activity-supervisor" maxlength="100" required placeholder="Your name"></label>
+        <div class="form-row">
+          <label>Entry type *<select id="activity-type" required>
+            <option value="Inspection">Inspection</option><option value="Corrective action">Corrective action</option>
+            <option value="Status update">Status update</option><option value="Note">Note</option>
+          </select></label>
+          <label>Status *<select id="activity-status" required>
+            <option value="Open">Open</option><option value="In Progress">In Progress</option><option value="Resolved">Resolved</option>
+          </select></label>
+        </div>
+        <div class="form-row">
+          <label>Site zone<input id="activity-zone" maxlength="120" placeholder="e.g. Loading bay"></label>
+          <label>Worker / hat<select id="activity-device"><option value="">Not linked to a hat</option></select></label>
+        </div>
+        <label>Hazard category<input id="activity-hazard" maxlength="80" placeholder="e.g. VEHICLE (optional)"></label>
+        <label>Summary *<input id="activity-summary" maxlength="180" required placeholder="Short description of what happened or changed"></label>
+        <label>Details<textarea id="activity-details" maxlength="4000" placeholder="What was observed? What action was taken? Include relevant context."></textarea></label>
+        <label>Follow-up required<textarea id="activity-followup" maxlength="1500" placeholder="Next steps, owner or review date (optional)"></textarea></label>
+        <label class="toggle"><input id="activity-simulated" type="checkbox"> This entry relates to simulated/demo data</label>
+        <button id="activity-submit" type="submit">Save activity entry</button>
+        <div id="activity-form-message" class="form-message" role="status" aria-live="polite"></div>
+      </form>
+    </section>
+    <section class="card">
+      <div class="cardhead"><h2>Recorded activity</h2><span id="activity-count" class="activity-meta">Loading…</span></div>
+      <div class="activity-tools">
+        <select id="activity-filter-status" aria-label="Filter by status"><option value="">All statuses</option><option>Open</option><option>In Progress</option><option>Resolved</option></select>
+        <select id="activity-filter-type" aria-label="Filter by type"><option value="">All entry types</option><option>Inspection</option><option>Corrective action</option><option>Status update</option><option>Note</option></select>
+        <input id="activity-search" type="search" placeholder="Search entries" aria-label="Search entries">
+      </div>
+      <div id="activity-list"><div class="empty">Loading activity entries…</div></div>
+    </section>
+  </div>
+</main>
+
 <script>
 const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const SEV = ["high", "medium", "low"];
@@ -221,16 +323,22 @@ simBox.onchange = () => { state.sim = simBox.checked; localSet("sim", state.sim 
 document.getElementById("o-search").oninput = () => site && renderWorkers(site);
 document.getElementById("tab-worker").onclick = e => { e.preventDefault();
   location.hash = "#worker/" + encodeURIComponent(state.device || localGet("device") || "hat-01"); };
+document.getElementById("tab-site").onclick = e => { e.preventDefault(); location.hash = "#"; };
+document.getElementById("tab-activity").onclick = e => { e.preventDefault(); location.hash = "#activity"; };
 
 function route() {
   const m = location.hash.match(/^#worker\/(.*)$/);
-  state.view = m ? "worker" : "site";
+  state.view = m ? "worker" : (location.hash === "#activity" ? "activity" : "site");
   if (m) { state.device = decodeURIComponent(m[1]); localSet("device", state.device); }
   document.getElementById("site").hidden = state.view !== "site";
   document.getElementById("worker").hidden = state.view !== "worker";
+  document.getElementById("activity").hidden = state.view !== "activity";
   document.getElementById("device").hidden = state.view !== "worker";
+  document.getElementById("range").hidden = state.view === "activity";
+  document.getElementById("sim").closest("label").hidden = state.view === "worker";
   document.getElementById("tab-site").classList.toggle("on", state.view === "site");
   document.getElementById("tab-worker").classList.toggle("on", state.view === "worker");
+  document.getElementById("tab-activity").classList.toggle("on", state.view === "activity");
   window.scrollTo(0, 0);
   load();
 }
@@ -243,6 +351,61 @@ function spark(values, color) {
   return `<svg class="spark" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" aria-hidden="true">` +
     values.map((v, i) => v ? `<rect x="${(i * bw + 0.5).toFixed(1)}" y="${(h - (v / max) * h).toFixed(1)}"
       width="${Math.max(1, bw - 1).toFixed(1)}" height="${((v / max) * h).toFixed(1)}" fill="${color}" rx="1"/>` : "").join("") + "</svg>";
+}
+
+function pct(part, total) {
+  return total > 0 ? `${Math.round(part / total * 100)}%` : "0%";
+}
+function insightCard(label, headline, detail) {
+  return `<article class="insight"><div class="eyebrow">${esc(label)}</div><div class="headline">${esc(headline)}</div><p>${esc(detail)}</p></article>`;
+}
+function renderSiteInsights(d) {
+  const cards = [];
+  const zoneRows = (d.zones || []).map(z => ({
+    zone: z.zone, total: (z.high || 0) + (z.medium || 0) + (z.low || 0)
+  })).filter(z => z.total > 0).sort((a, b) => b.total - a.total);
+  const zoneTotal = zoneRows.reduce((n, z) => n + z.total, 0);
+  if (zoneRows.length) {
+    const top = zoneRows[0];
+    cards.push(insightCard("Zone concentration", `${top.zone} · ${pct(top.total, zoneTotal)} of zone alerts`,
+      `${top.total.toLocaleString()} of ${zoneTotal.toLocaleString()} alerts are associated with this zone in the selected range. This reflects recorded alert volume, not a measured hazard rate; worker counts and time spent in each zone are not normalized.`));
+  } else {
+    cards.push(insightCard("Zone concentration", "No zone pattern yet", "There are no recorded zone alerts in this time range."));
+  }
+
+  const workers = (d.workers || []).filter(w => (w.alerts || 0) > 0).sort((a, b) => b.alerts - a.alerts);
+  const workerAlerts = workers.reduce((n, w) => n + w.alerts, 0);
+  if (workers.length) {
+    const top = workers[0];
+    cards.push(insightCard("Alert distribution", `${top.name} · ${pct(top.alerts, workerAlerts)} of worker alerts`,
+      `${top.alerts.toLocaleString()} of ${workerAlerts.toLocaleString()} alerts are associated with this hat. This is a prompt to review the underlying events and work context, not a ranking of worker behaviour or performance.`));
+  } else {
+    cards.push(insightCard("Alert distribution", "No alerts recorded", "No worker alerts were recorded in this time range."));
+  }
+
+  const labels = d.timeline?.labels || [];
+  const series = d.timeline?.series || {};
+  const buckets = labels.map((_, i) => SEV.reduce((n, sev) => n + ((series[sev] || [])[i] || 0), 0));
+  if (buckets.length >= 4) {
+    const mid = Math.floor(buckets.length / 2);
+    const earlier = buckets.slice(0, mid).reduce((a, b) => a + b, 0);
+    const later = buckets.slice(mid).reduce((a, b) => a + b, 0);
+    if (earlier === 0 && later === 0) {
+      cards.push(insightCard("Time pattern", "No alerts in the timeline", "No alerts were recorded in the available time buckets."));
+    } else if (earlier === 0 || later === 0) {
+      cards.push(insightCard("Time pattern", later > 0 ? "Alerts appear in the later buckets" : "Alerts appear in the earlier buckets",
+        "One half of the selected timeline has no recorded alerts. Check the underlying timeline and data coverage before drawing conclusions."));
+    } else {
+      const change = Math.round((later - earlier) / earlier * 100);
+      const direction = change > 0 ? "higher" : change < 0 ? "lower" : "unchanged";
+      const magnitude = Math.abs(change);
+      cards.push(insightCard("Time pattern", `${magnitude}% ${direction} in the later half`,
+        `The later half contains ${later.toLocaleString()} alerts versus ${earlier.toLocaleString()} in the earlier half. The halves contain the same number of buckets; this is a descriptive comparison, not evidence of why the counts changed.`));
+    }
+  } else {
+    cards.push(insightCard("Time pattern", "Not enough time buckets", "More populated timeline buckets are needed to compare the earlier and later parts of this range."));
+  }
+  document.getElementById("site-insights").innerHTML = cards.join("");
 }
 
 function renderSite(d) {
@@ -274,6 +437,7 @@ function renderSite(d) {
     return `<div class="zrow"><div class="nm" title="${esc(z.zone)}">${esc(z.zone)}</div>
       <div class="riskbar" style="width:${Math.max(4, t / zmax * 100)}%">${SEV.map(s => z[s] ? `<i style="width:${z[s] / t * 100}%;background:var(--${s})"></i>` : "").join("")}</div>
       <div class="ct">${t.toLocaleString()}</div></div>`; }).join("") : `<div class="empty">No alerts in this period</div>`;
+  renderSiteInsights(d);
   renderWorkers(d);
 }
 
@@ -290,7 +454,7 @@ function renderWorkers(d) {
       <td>${esc(w.zone)}</td>
       <td>${spark(w.spark, css("--" + sevTop))}</td>
       <td class="num">${w.alerts.toLocaleString()}</td><td class="num">${w.high.toLocaleString()}</td>
-      <td title="risk score ${w.risk} = 5×high + 2×medium + 1×low alerts"><div class="riskbar" style="width:${Math.max(3, w.risk / rmax * 100)}%">${t ? SEV.map(s => w[s] ? `<i style="width:${w[s] / t * 100}%;background:var(--${s})"></i>` : "").join("") : ""}</div></td>
+      <td title="risk score ${w.risk} = 5×high + 2×medium + 1×low"><div class="riskbar" style="width:${Math.max(3, w.risk / rmax * 100)}%">${t ? SEV.map(s => w[s] ? `<i style="width:${w[s] / t * 100}%;background:var(--${s})"></i>` : "").join("") : ""}</div></td>
       <td>${w.top_hazard ? esc(name(w.top_hazard)) : "–"}</td>
       <td style="white-space:nowrap">${w.last_alert ? `${sevPill(w.last_alert.severity)} ${esc(name(w.last_alert.hazard))}<br><span style="color:var(--muted);font-size:12px">${ago(w.last_alert.time)}</span>` : "–"}</td></tr>`;
   }).join("") : `<tr><td colspan="8" class="empty">No workers match</td></tr>`;
@@ -310,8 +474,60 @@ function axes(stacked, horizontal) {
            y: { stacked, grid: horizontal ? { display: false } : grid, ticks, beginAtZero: true } };
 }
 
+function renderWorkerInsights(d) {
+  const cards = [];
+  const hazards = (d.hazards || []).reduce((acc, h) => {
+    const key = h.hazard;
+    acc[key] = (acc[key] || 0) + (h.alerts || 0);
+    return acc;
+  }, {});
+  const rankedHazards = Object.entries(hazards).filter(([, n]) => n > 0).sort((a, b) => b[1] - a[1]);
+  const alertTotal = rankedHazards.reduce((n, [, count]) => n + count, 0);
+  if (rankedHazards.length) {
+    const [hazard, count] = rankedHazards[0];
+    cards.push(insightCard("Most-recorded alert type", `${name(hazard)} · ${pct(count, alertTotal)}`,
+      `${count.toLocaleString()} of ${alertTotal.toLocaleString()} alerts in this view are associated with this hazard category. Review the event context and confirm that the detected class is relevant to the work area.`));
+  } else {
+    cards.push(insightCard("Most-recorded alert type", "No alerts recorded", "There are no hazard alerts in this worker's selected time range."));
+  }
+
+  const positions = (d.positions || []).filter(p => ["left", "centre", "right"].includes(p.position));
+  const posCounts = { left: 0, centre: 0, right: 0 };
+  positions.forEach(p => { posCounts[p.position] += p.count || 0; });
+  const posTotal = Object.values(posCounts).reduce((a, b) => a + b, 0);
+  const posRank = Object.entries(posCounts).sort((a, b) => b[1] - a[1]);
+  if (posTotal) {
+    const [side, count] = posRank[0];
+    cards.push(insightCard("Image-relative direction", `${side} · ${pct(count, posTotal)} of positioned alerts`,
+      `${count.toLocaleString()} of ${posTotal.toLocaleString()} alerts with position data were classified on the ${side}. This describes the camera image region only; it does not estimate distance or physical proximity.`));
+  } else {
+    cards.push(insightCard("Image-relative direction", "No position data", "No alerts with left / centre / right position labels were recorded in this range."));
+  }
+
+  const labels = d.timeline?.labels || [];
+  const series = d.timeline?.series || {};
+  const buckets = labels.map((_, i) => SEV.reduce((n, sev) => n + ((series[sev] || [])[i] || 0), 0));
+  if (buckets.length >= 4) {
+    const mid = Math.floor(buckets.length / 2);
+    const earlier = buckets.slice(0, mid).reduce((a, b) => a + b, 0);
+    const later = buckets.slice(mid).reduce((a, b) => a + b, 0);
+    if (earlier && later) {
+      const change = Math.round((later - earlier) / earlier * 100);
+      const direction = change > 0 ? "more" : change < 0 ? "fewer" : "the same number of";
+      cards.push(insightCard("Change over this range", `${Math.abs(change)}% ${change > 0 ? "increase" : change < 0 ? "decrease" : "change"}`,
+        `The later half contains ${later.toLocaleString()} alerts compared with ${earlier.toLocaleString()} in the earlier half (${direction} alerts). This comparison does not identify a cause.`));
+    } else {
+      cards.push(insightCard("Change over this range", "Limited comparison", "Alerts appear in only one half of the available timeline, so a percentage comparison would be misleading."));
+    }
+  } else {
+    cards.push(insightCard("Change over this range", "Not enough time buckets", "More populated time buckets are needed to compare the earlier and later parts of this range."));
+  }
+  document.getElementById("worker-insights").innerHTML = cards.join("");
+}
+
 function render(d) {
   const k = d.kpis;
+  renderWorkerInsights(d);
   document.getElementById("k-det").textContent = k.detections.toLocaleString();
   document.getElementById("k-det-s").textContent = `${k.devices} hat${k.devices === 1 ? "" : "s"} reporting · last ${ago(k.last_event)}`;
   document.getElementById("k-alerts").textContent = k.alerts.toLocaleString();
@@ -380,30 +596,271 @@ function render(d) {
       <td style="white-space:nowrap">${r.last_seen ? ago(r.last_seen) : "–"}</td><td>${esc(r.control)}</td></tr>`).join("");
 }
 
-async function load() {
-  const dot = document.getElementById("dot"), upd = document.getElementById("updated");
-  const view = state.view, banner = document.getElementById(view === "site" ? "banner-site" : "banner");
-  const my = ++loading;
+let activityRows = [];
+
+function activityDate(value) {
+  if (!value) return "";
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? String(value) : d.toLocaleString();
+}
+
+function renderActivity(rows) {
+  activityRows = Array.isArray(rows) ? rows : [];
+  const statusFilter = document.getElementById("activity-filter-status").value;
+  const typeFilter = document.getElementById("activity-filter-type").value;
+  const q = document.getElementById("activity-search").value.trim().toLowerCase();
+
+  const filtered = activityRows.filter(a => {
+    const hay = [
+      a.supervisor, a.action_type, a.status, a.zone, a.device_id,
+      a.hazard, a.summary, a.details, a.follow_up
+    ].join(" ").toLowerCase();
+
+    return (!statusFilter || a.status === statusFilter) &&
+           (!typeFilter || a.action_type === typeFilter) &&
+           (!q || hay.includes(q));
+  });
+
+  document.getElementById("activity-count").textContent =
+    `${filtered.length} shown · ${activityRows.length} total`;
+
+  const host = document.getElementById("activity-list");
+
+  if (!filtered.length) {
+    host.innerHTML = '<div class="empty">No matching activity entries.</div>';
+    return;
+  }
+
+  host.innerHTML = filtered.map(a => {
+    const statusClass = a.status === "Open"
+      ? "open"
+      : a.status === "In Progress" ? "in-progress" : "";
+
+    const tags = [
+      a.zone,
+      a.device_id ? `Hat ${a.device_id}` : "",
+      a.hazard,
+      a.simulated ? "SIMULATED" : "LIVE / SITE"
+    ].filter(Boolean).map(t => `<span class="activity-tag">${esc(t)}</span>`).join("");
+
+    const history = (a.history || []).map(h =>
+      `<li><b>${esc(activityDate(h.changed_at))}</b> · ${esc(h.changed_by)}: ${esc(h.note)}</li>`
+    ).join("");
+
+    return `<article class="activity-entry" data-entry-id="${a.id}">
+      <div class="activity-entry-head">
+        <div>
+          <h3>${esc(a.summary)}</h3>
+          <div class="activity-meta">${esc(a.action_type)} · ${esc(a.supervisor)} · ${esc(activityDate(a.created_at))}</div>
+        </div>
+        <span class="activity-status ${statusClass}">${esc(a.status)}</span>
+      </div>
+      <div class="activity-tags">${tags}</div>
+      ${a.details ? `<div class="activity-detail">${esc(a.details)}</div>` : ""}
+      ${a.follow_up ? `<div class="activity-detail"><b>Follow-up:</b> ${esc(a.follow_up)}</div>` : ""}
+      <details class="activity-history">
+        <summary>Update history (${(a.history || []).length})</summary>
+        <ul>${history || "<li>Entry created; no later updates yet.</li>"}</ul>
+      </details>
+      <form class="activity-update" onsubmit="return updateActivity(event, ${a.id})">
+        <select name="status" aria-label="New status">
+          <option ${a.status === "Open" ? "selected" : ""}>Open</option>
+          <option ${a.status === "In Progress" ? "selected" : ""}>In Progress</option>
+          <option ${a.status === "Resolved" ? "selected" : ""}>Resolved</option>
+        </select>
+        <input name="note" maxlength="1000" placeholder="Add an update / reason" required aria-label="Update note">
+        <button type="submit">Log update</button>
+      </form>
+    </article>`;
+  }).join("");
+}
+
+async function loadActivity() {
+  const banner = document.getElementById("banner-activity");
+
   try {
-    const sim = state.sim ? 1 : 0;
-    const url = view === "site" ? `/api/overview?range=${state.range}&sim=${sim}`
-      : `/api/data?range=${state.range}&sim=${sim}&device=${encodeURIComponent(state.device)}`;
-    const res = await fetch(url);
-    const d = await res.json();
-    if (!res.ok) throw new Error(d.error || res.statusText);
-    if (my !== loading || view !== state.view) return;   // a newer request superseded this one
-    view === "site" ? renderSite(d) : render(d);
-    lastOk = Date.now();
-    dot.className = "dot"; upd.textContent = "live · updated " + clock(d.now);
+    const res = await fetch(`/api/activity?sim=${state.sim ? 1 : 0}`);
+    const data = await res.json();
+
+    if (!res.ok) throw new Error(data.error || res.statusText);
+
+    renderActivity(data.entries || []);
     banner.style.display = "none";
+    document.getElementById("dot").className = "dot";
+    document.getElementById("updated").textContent = "activity log · " + clock(data.now);
+    lastOk = Date.now();
+
+    const deviceSelect = document.getElementById("activity-device");
+    const existing = deviceSelect.value;
+
+    const options = (data.devices || []).map(d =>
+      `<option value="${esc(d.id)}">${esc(d.name)} · ${esc(d.id)}</option>`
+    ).join("");
+
+    deviceSelect.innerHTML =
+      '<option value="">Not linked to a hat</option>' + options;
+
+    if ([...deviceSelect.options].some(o => o.value === existing)) {
+      deviceSelect.value = existing;
+    }
+
   } catch (e) {
-    dot.className = "dot err"; upd.textContent = "can't reach Tiger Cloud";
-    banner.textContent = "Dashboard can't load data: " + e.message; banner.style.display = "block";
+    document.getElementById("dot").className = "dot err";
+    document.getElementById("updated").textContent = "activity log unavailable";
+
+    banner.textContent =
+      "Could not load activity log: " + e.message +
+      ". Apply the activity_log.sql migration, then restart the dashboard server.";
+
+    banner.style.display = "block";
+    document.getElementById("activity-list").innerHTML =
+      '<div class="empty">Activity log could not be loaded.</div>';
   }
 }
+
+async function updateActivity(event, id) {
+  event.preventDefault();
+
+  const form = event.currentTarget;
+  const button = form.querySelector("button");
+  button.disabled = true;
+
+  try {
+    const res = await fetch(`/api/activity/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        supervisor: document.getElementById("activity-supervisor").value.trim(),
+        status: form.elements.status.value,
+        update_note: form.elements.note.value.trim()
+      })
+    });
+
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || res.statusText);
+
+    await loadActivity();
+
+  } catch (e) {
+    alert("Could not save update: " + e.message);
+  } finally {
+    button.disabled = false;
+  }
+
+  return false;
+}
+
+document.getElementById("activity-form").addEventListener("submit", async event => {
+  event.preventDefault();
+
+  const form = event.currentTarget;
+  const button = document.getElementById("activity-submit");
+  const msg = document.getElementById("activity-form-message");
+
+  button.disabled = true;
+  msg.className = "form-message";
+  msg.textContent = "Saving…";
+
+  const payload = {
+    supervisor: document.getElementById("activity-supervisor").value.trim(),
+    action_type: document.getElementById("activity-type").value,
+    status: document.getElementById("activity-status").value,
+    zone: document.getElementById("activity-zone").value.trim(),
+    device_id: document.getElementById("activity-device").value,
+    hazard: document.getElementById("activity-hazard").value.trim(),
+    summary: document.getElementById("activity-summary").value.trim(),
+    details: document.getElementById("activity-details").value.trim(),
+    follow_up: document.getElementById("activity-followup").value.trim(),
+    simulated: document.getElementById("activity-simulated").checked
+  };
+
+  try {
+    const res = await fetch("/api/activity", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || res.statusText);
+
+    const savedSupervisor = payload.supervisor;
+
+    form.reset();
+    document.getElementById("activity-supervisor").value = savedSupervisor;
+    document.getElementById("activity-status").value = "Open";
+
+    msg.textContent = `Saved entry #${data.id}.`;
+    await loadActivity();
+
+  } catch (e) {
+    msg.className = "form-message error";
+    msg.textContent = "Could not save: " + e.message;
+
+  } finally {
+    button.disabled = false;
+  }
+});
+
+["activity-filter-status", "activity-filter-type", "activity-search"].forEach(id => {
+  document.getElementById(id).addEventListener(
+    id === "activity-search" ? "input" : "change",
+    () => renderActivity(activityRows)
+  );
+});
+
+async function load() {
+  const dot = document.getElementById("dot");
+  const upd = document.getElementById("updated");
+  const view = state.view;
+
+  if (view === "activity") {
+    await loadActivity();
+    return;
+  }
+
+  const banner = document.getElementById(
+    view === "site" ? "banner-site" : "banner"
+  );
+
+  const my = ++loading;
+
+  try {
+    const sim = state.sim ? 1 : 0;
+
+    const url = view === "site"
+      ? `/api/overview?range=${state.range}&sim=${sim}`
+      : `/api/data?range=${state.range}&sim=${sim}&device=${encodeURIComponent(state.device)}`;
+
+    const res = await fetch(url);
+    const d = await res.json();
+
+    if (!res.ok) throw new Error(d.error || res.statusText);
+    if (my !== loading || view !== state.view) return;
+
+    view === "site" ? renderSite(d) : render(d);
+
+    lastOk = Date.now();
+    dot.className = "dot";
+    upd.textContent = "live · updated " + clock(d.now);
+    banner.style.display = "none";
+
+  } catch (e) {
+    dot.className = "dot err";
+    upd.textContent = "can't reach Tiger Cloud";
+    banner.textContent = "Dashboard can't load data: " + e.message;
+    banner.style.display = "block";
+  }
+}
+
 route();
 setInterval(load, 5000);
-setInterval(() => { if (lastOk && Date.now() - lastOk > 15000) document.getElementById("dot").className = "dot stale"; }, 2000);
+
+setInterval(() => {
+  if (lastOk && Date.now() - lastOk > 15000) {
+    document.getElementById("dot").className = "dot stale";
+  }
+}, 2000);
 </script>
 </body>
 </html>
