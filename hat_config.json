@@ -23,7 +23,8 @@
       "ttc_alert_s": 3.0,
       "stand_aspect": 1.3,
       "down_aspect": 0.9,
-      "down_frames": 8,
+      "down_hold_s": 2.0,
+      "lying_aspect": 0.7,
       "lying_still_s": 5.0
     },
     "motion": {
