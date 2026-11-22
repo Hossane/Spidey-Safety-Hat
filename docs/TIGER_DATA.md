@@ -121,8 +121,14 @@ There is only one real hat, so a simulated crew shows what a full site looks lik
 ```powershell
 python scripts/sim_crew.py add                    # 12 workers, last 8 h (device ids sim-01...)
 python scripts/sim_crew.py add --workers 40 --live  # more workers, keep adding detections live
+python scripts/sim_crew.py topup                  # fill in from where their data stopped up to now
 python scripts/sim_crew.py remove                 # delete all simulated workers and data
 ```
 
 Simulated workers only appear when the dashboard's **Simulated crew** switch is on. They're
 badged SIM; the real hat is badged LIVE.
+
+While the switch is on, the dashboard keeps the crew current: every 30 s it adds their
+detections from where they stopped up to now (at most 8 h back), so the overview and the
+"What the data suggests" cards always include them. It only does this when simulated
+workers exist (after `sim_crew.py add`), and it only writes `sim-` rows.

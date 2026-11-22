@@ -8,6 +8,7 @@ never touched.
     python scripts/sim_crew.py add                 # 12 workers, last 8 hours
     python scripts/sim_crew.py add --workers 40 --hours 24
     python scripts/sim_crew.py add --live          # ...then keep adding detections live (Ctrl+C stops)
+    python scripts/sim_crew.py topup               # fill in from where the crew's data stopped up to now
     python scripts/sim_crew.py remove              # delete all simulated workers and their data
 """
 import argparse
@@ -101,24 +102,57 @@ def register(conn, crew):
     conn.commit()
 
 
+def generate(hats, rng, start, end):
+    """Detections for every simulated hat between start and end."""
+    events = []
+    for h in hats:
+        t = start
+        while True:
+            t += timedelta(seconds=rng.expovariate(h.w["rate"] / 3600))
+            if t >= end:
+                break
+            events.extend(h.incident(t))
+    return events
+
+
+def insert(conn, events, log=None):
+    for i in range(0, len(events), 5000):
+        tiger_bridge.insert_events(conn, events[i:i + 5000])
+        if log:
+            log(f"  {min(i + 5000, len(events)):,} / {len(events):,} detections")
+
+
+def top_up(url, max_hours=8, min_gap_s=30):
+    """Keep the simulated crew current: add detections from where their data stopped up to
+    now (at most max_hours back). Does nothing if there's no simulated crew. Used by the
+    dashboard when its "Simulated crew" switch is on, so the crew never goes stale."""
+    with tiger_bridge.connect(url) as conn:
+        n = conn.execute("SELECT count(*) FROM workers WHERE simulated").fetchone()[0]
+        if not n:
+            return 0
+        last = conn.execute("SELECT max(time) FROM detections WHERE device_id LIKE %s",
+                            (PREFIX + "%",)).fetchone()[0]
+        now = datetime.now(timezone.utc).replace(microsecond=0)
+        start = now - timedelta(hours=max_hours)
+        if last and last > start:
+            start = last + timedelta(seconds=1)
+        if (now - start).total_seconds() < min_gap_s:
+            return 0
+        rng = random.Random(int(start.timestamp()))
+        events = generate([Hat(w, rng) for w in make_crew(n)], rng, start, now)
+        insert(conn, events)
+        return len(events)
+
+
 def cmd_add(url, args):
     crew = make_crew(args.workers)
     rng = random.Random(42)
     hats = [Hat(w, rng) for w in crew]
     now = datetime.now(timezone.utc).replace(microsecond=0)   # whole seconds: re-runs dedup
-    events = []
-    for h in hats:
-        t = now - timedelta(hours=args.hours)
-        while True:
-            t += timedelta(seconds=rng.expovariate(h.w["rate"] / 3600))
-            if t >= now:
-                break
-            events.extend(h.incident(t))
+    events = generate(hats, rng, now - timedelta(hours=args.hours), now)
     with tiger_bridge.connect(url) as conn:
         register(conn, crew)
-        for i in range(0, len(events), 5000):
-            tiger_bridge.insert_events(conn, events[i:i + 5000])
-            print(f"  {min(i + 5000, len(events)):,} / {len(events):,} detections", flush=True)
+        insert(conn, events, log=lambda m: print(m, flush=True))
     print(f"Added {len(crew)} simulated workers and {len(events):,} detections over the last {args.hours:g} h.")
     if args.live:
         live(url, hats, rng)
@@ -141,6 +175,11 @@ def live(url, hats, rng):
         writer.close()
 
 
+def cmd_topup(url, args):
+    n = top_up(url, args.hours)
+    print(f"Added {n:,} simulated detections up to now." if n else "Simulated crew is already up to date (or there is none).")
+
+
 def cmd_remove(url, args):
     with tiger_bridge.connect(url) as conn:
         n = conn.execute("DELETE FROM detections WHERE device_id LIKE %s", (PREFIX + "%",)).rowcount
@@ -159,6 +198,8 @@ def main():
     p.add_argument("--hours", type=float, default=8)
     p.add_argument("--live", action="store_true", help="keep adding detections in real time")
     sub.add_parser("remove")
+    p = sub.add_parser("topup")
+    p.add_argument("--hours", type=float, default=8, help="fill at most this far back")
     args = ap.parse_args()
     url = tiger_bridge.database_url()
     if not url:
