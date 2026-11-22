@@ -99,7 +99,11 @@ class Track:
         self.announced = False
         self.below_since = None
         self.aspects = deque([aspect(box)] if self.shape_ok else [], maxlen=30)   # usable views only
-        self.down_frames = 0
+        self.upright_at = None      # last time seen standing
+        self.down_since = None      # start of the current wide-and-low spell
+        self.floor_at = None        # last frame that looked like lying on the floor
+        self.spell = []             # (on the floor?, shape) for each frame of the current spell
+        self.down_alert_at = None   # last DOWN / LYING alert
         self.armed = {"DOWN": True, "CLOSE": True, "APPROACH": True}
         self.visible = True
         self.areas.append((t, area(box), self.clipped))
@@ -179,12 +183,16 @@ class Tracker:
 
     def __init__(self, iou_min=0.25, max_dist=0.2, lost_after_s=1.0, memory_s=120.0,
                  reid_min=0.6, close_area=0.35, approach_ratio=1.8, approach_window_s=1.5,
-                 stand_aspect=1.3, down_aspect=0.9, down_frames=8, settle_s=1.0, rearm_s=3.0,
+                 stand_aspect=1.3, down_aspect=0.9, down_hold_s=2.0, down_grace_s=1.0,
+                 fall_window_s=10.0, down_rearm_s=10.0, floor_share=0.7, lying_aspect=0.7, settle_s=1.0, rearm_s=3.0,
                  lying_still_s=5.0, ttc_alert_s=3.0, motion_window_s=1.5):
         self.iou_min, self.max_dist = iou_min, max_dist
         self.lost_after_s, self.memory_s, self.reid_min = lost_after_s, memory_s, reid_min
         self.close_area, self.approach_ratio, self.approach_window_s = close_area, approach_ratio, approach_window_s
-        self.stand_aspect, self.down_aspect, self.need_down = stand_aspect, down_aspect, down_frames
+        self.stand_aspect, self.down_aspect = stand_aspect, down_aspect
+        self.down_hold_s, self.down_grace_s = down_hold_s, down_grace_s
+        self.fall_window_s, self.down_rearm_s = fall_window_s, down_rearm_s
+        self.floor_share, self.lying_aspect = floor_share, lying_aspect
         self.settle_s, self.rearm_s = settle_s, rearm_s
         self.lying_still_s, self.ttc_alert_s, self.motion_window_s = lying_still_s, ttc_alert_s, motion_window_s
         self.tracks = {}
@@ -193,7 +201,7 @@ class Tracker:
     @classmethod
     def from_config(cls, cfg):
         keys = ("iou_min", "max_dist", "lost_after_s", "memory_s", "reid_min", "close_area",
-                "approach_ratio", "approach_window_s", "stand_aspect", "down_aspect", "down_frames",
+                "approach_ratio", "approach_window_s", "stand_aspect", "down_aspect", "down_hold_s", "down_grace_s", "fall_window_s", "down_rearm_s", "floor_share", "lying_aspect",
                 "settle_s", "rearm_s", "lying_still_s", "ttc_alert_s", "motion_window_s")
         return cls(**{k: cfg[k] for k in keys if k in cfg})
 
@@ -244,8 +252,11 @@ class Tracker:
             if t - tr.last_seen > self.lost_after_s:   # was out of view, not just a jump
                 tr.areas.clear()                       # don't read the gap as "approaching"
                 tr.path.clear()
-                tr.down_frames = 0
-                tr.lying_since = None
+                if t - tr.last_seen >= self.down_rearm_s:   # a new episode: may alert again
+                    tr.armed["DOWN"] = True
+                    tr.upright_at = None
+                tr.down_since = tr.floor_at = None
+                tr.spell = []
                 tr.entered = t
                 incidents.append(("BACK", tr))
 
@@ -365,32 +376,45 @@ class Tracker:
                 elif ratio < 1.2 and tr.motion != "approaching":
                     tr.armed["APPROACH"] = True
 
-        # DOWN (people only): their usual upright shape turns wide for a few frames.
+        # DOWN / LYING (people only).
+        #   DOWN:  seen standing, then wide and low in the frame for down_hold_s.
+        #   LYING: the same for lying_still_s without much movement, even if the fall
+        #          wasn't seen (they came into view already on the floor).
+        # A spell of "on the floor" frames survives odd frames (detector glitches) up to
+        # down_grace_s. An alert needs: the current frame on the floor, most of the spell
+        # on the floor (floor_share), and the spell clearly wide (median shape at most
+        # lying_aspect). Someone sitting or leaning in close to the camera gives boxes
+        # that are low but only a little wide, and flicker; real lying-down boxes are wider.
+        # After an alert, it re-arms once they're seen standing again, or after they've
+        # been out of view for down_rearm_s.
         if tr.name == "person":
             a = aspect(tr.box)
-            floor = tr.on_floor()
-            seen_upright = list(tr.aspects)[:-1] if tr.shape_ok else list(tr.aspects)
-            usual = float(np.median(seen_upright)) if len(seen_upright) >= 3 else 0.0
-            if floor and usual >= self.stand_aspect and a <= self.down_aspect:
-                tr.down_frames += 1
-            elif tr.shape_ok and a >= self.stand_aspect:
-                tr.down_frames = 0
-                tr.armed["DOWN"] = True
-            elif not floor:
-                tr.down_frames = 0
-            if tr.down_frames >= self.need_down and tr.armed["DOWN"]:
-                tr.armed["DOWN"] = False
-                found.append("DOWN")
-
-            # LYING: wide and not moving for lying_still_s, even if we never saw them upright.
-            if floor and a <= self.down_aspect:
-                tr.lying_since = tr.lying_since or t
-                if (t - tr.lying_since >= self.lying_still_s and tr.armed["DOWN"]
-                        and self._still_for(tr, t, self.lying_still_s)):
-                    tr.armed["DOWN"] = False
-                    found.append("LYING")
-            else:
-                tr.lying_since = None
+            floor = tr.on_floor() and a <= self.down_aspect
+            if tr.shape_ok and a >= self.stand_aspect:
+                tr.upright_at = t
+                if tr.down_alert_at is None or t - tr.down_alert_at >= self.down_rearm_s:
+                    tr.armed["DOWN"] = True     # up again (not just a flicker right after an alert)
+            if floor:
+                tr.floor_at = t
+                if tr.down_since is None:
+                    tr.down_since, tr.spell = t, []
+            elif tr.down_since is not None and t - tr.floor_at > self.down_grace_s:
+                tr.down_since, tr.spell = None, []
+            if tr.down_since is not None:
+                tr.spell.append((floor, a))
+            tr.lying_since = tr.down_since            # kept for callers that show it
+            if floor and tr.armed["DOWN"]:
+                lying_for = t - tr.down_since
+                shapes = [x for f, x in tr.spell if f]
+                solid = (sum(f for f, _ in tr.spell) >= self.floor_share * len(tr.spell)
+                         and float(np.median(shapes)) <= self.lying_aspect)
+                fell = tr.upright_at is not None and tr.down_since - tr.upright_at <= self.fall_window_s
+                kind = ("DOWN" if solid and fell and lying_for >= self.down_hold_s else
+                        "LYING" if solid and lying_for >= self.lying_still_s
+                        and self._still_for(tr, t, self.lying_still_s) else None)
+                if kind:
+                    tr.armed["DOWN"], tr.down_alert_at = False, t
+                    found.append(kind)
         return found
 
     def counts(self):

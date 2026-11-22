@@ -14,11 +14,17 @@ speaker (the JBL). Settings are in `hat_config.json`.
 | Lying still | A person lying on the ground and not moving for 5 s (`lying_still_s`), even if the fall wasn't seen. | `PERSON_DOWN` |
 | Sudden movement (`motion.py`) | A burst of movement the object model can't label, such as a falling load or a swinging hook. Movement of tracked people and vehicles is ignored, and so is the whole view moving (the wearer turning their head). | `MOTION` |
 
-"Person down" needs a wide box low in the frame, held for 8 frames (`down_frames`, about
-2–3 s at the Pi's frame rate) so a quick crouch doesn't count. The camera is close, so a lying
-body may run off one side or the bottom of the view. These don't count: a box touching the
-top edge (a head too close to judge), a box touching both sides (a torso filling the view),
-and a thin strip along the bottom edge (head and shoulders).
+"Person down" needs someone seen standing in the last 10 s (`fall_window_s`) who is then
+wide and low in the frame for 2 s (`down_hold_s`), so a quick crouch doesn't count. A single
+odd frame (a detector glitch, up to 1 s) doesn't reset it. Most of that time must be on the
+floor, and the box must be clearly wide (median shape at most `lying_aspect`, 0.7). Someone
+sitting or leaning in close to the camera gives boxes that are only a little wide and
+flicker. After an alert it re-arms when the person has been out of view for 10 s, or is seen
+standing again at least 10 s later (`down_rearm_s`).
+
+The camera is close, so a lying body may run off one side or the bottom of the view. These
+don't count: a box touching the top edge (a head too close to judge), a box touching both
+sides (a torso filling the view), and a thin strip along the bottom edge (head and shoulders).
 
 ## Mic (YAMNet on the Pi)
 
