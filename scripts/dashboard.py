@@ -17,6 +17,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import sim_crew  # noqa: E402
 import tiger_bridge  # noqa: E402
 
 HTML = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dashboard.html")
@@ -375,7 +376,32 @@ def update_activity(db, activity_id, data):
     return {"ok": True, "id": row[0], "status": row[1]} if row else None
 
 
-def make_handler(db):
+class SimTopUp:
+    """With "Simulated crew" on, keep the crew's data current (sim_crew.top_up) so the
+    overview and insight cards always have simulated activity in the selected range. Runs
+    in the background, at most every 30 s; the next 5 s refresh shows the new data."""
+
+    def __init__(self, url, every_s=30):
+        self.url, self.every_s, self.last, self.busy = url, every_s, 0.0, threading.Lock()
+
+    def poke(self):
+        if time.monotonic() - self.last < self.every_s or not self.busy.acquire(blocking=False):
+            return
+        self.last = time.monotonic()
+
+        def run():
+            try:
+                n = sim_crew.top_up(self.url)
+                if n:
+                    print(f"[sim] added {n:,} simulated detections up to now", flush=True)
+            except Exception as e:  # noqa: BLE001 - never break the dashboard over demo data
+                print(f"[sim] top-up failed: {e}", flush=True)
+            finally:
+                self.busy.release()
+        threading.Thread(target=run, daemon=True).start()
+
+
+def make_handler(db, sim_top_up=None):
     class Handler(BaseHTTPRequestHandler):
         def _send(self, code, body, ctype):
             data = body.encode() if isinstance(body, str) else body
@@ -395,6 +421,8 @@ def make_handler(db):
             elif u.path in ("/api/data", "/api/overview"):
                 q = parse_qs(u.query)
                 rng, sim = q.get("range", ["8h"])[0], q.get("sim", ["0"])[0] == "1"
+                if sim and sim_top_up:
+                    sim_top_up.poke()
                 try:
                     data = (overview(db, rng, sim) if u.path == "/api/overview"
                             else gather(db, rng, q.get("device", [""])[0], sim))
@@ -447,7 +475,7 @@ def main():
     if not url:
         sys.exit("TIGER_DATABASE_URL is not set. Copy .env.example to .env and paste your Tiger Cloud "
                  "service's connection string.")
-    server = ThreadingHTTPServer((args.host, args.port), make_handler(Db(url)))
+    server = ThreadingHTTPServer((args.host, args.port), make_handler(Db(url), SimTopUp(url)))
     print(f"Hat Detect safety dashboard on http://localhost:{args.port}  (Ctrl+C to stop)", flush=True)
     try:
         server.serve_forever()
