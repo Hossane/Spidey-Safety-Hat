@@ -83,6 +83,37 @@ view took.
 Register a new hat: `INSERT INTO workers (device_id, name, role, zone) VALUES ('hat-02', 'Name', 'Role', 'Zone');`
 A hat that reports before it's registered still appears, by its device_id.
 
+Both tabs also have **What the data suggests** cards, worked out in the browser from the data
+already on screen:
+
+- **Site overview:** the zone and the worker with the most alerts, and whether alerts rose
+  or fell between the first and second half of the time range.
+- **Worker tab:** the hazard this hat records most, which side of the image most alerts
+  come from, and the same first-half / second-half change.
+
+They describe recorded alert counts only. They don't measure hazard rates or rank workers.
+
+### Activity log
+
+The **Activity log** tab is where supervisors record inspections, corrective actions, status
+updates and notes. Each entry can be linked to a zone, a hat and a hazard. Entries have a
+status (Open, In Progress or Resolved), and every status change is kept with a note and who
+made it. Entries marked as relating to simulated data only show with **Simulated crew** on.
+
+The tables are in `db/activity_log.sql`. It only adds tables and is safe to run again:
+
+```powershell
+python -c "import sys; sys.path.insert(0, 'scripts'); import tiger_bridge as t; t.connect(t.database_url(), autocommit=True).execute(open('db/activity_log.sql').read())"
+```
+
+| Table | What it holds |
+|---|---|
+| `supervisor_activity` | One row per entry: supervisor, type, status, zone, device_id, hazard, summary, details, follow-up |
+| `supervisor_activity_history` | Every change to an entry: when, who, the new status and a note |
+
+The dashboard only accepts new entries as JSON from its own page, so other websites can't
+post to it.
+
 ### Simulated crew (proof of concept for scale)
 
 There is only one real hat, so a simulated crew shows what a full site looks like:

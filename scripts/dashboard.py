@@ -8,6 +8,7 @@ Reads TIGER_DATABASE_URL from .env (see scripts/tiger_bridge.py).
 import argparse
 import json
 import os
+import re
 import sys
 import threading
 import time
@@ -50,6 +51,23 @@ class Db:
                     self.conn = None
                     if attempt == 2:
                         raise
+
+    def write(self, sql, params):
+        """Run one INSERT/UPDATE ... RETURNING and fetch its row while holding the lock. Not
+        retried: if the connection drops mid-write we can't tell whether it was saved."""
+        with self.lock:
+            try:
+                if self.conn is None or self.conn.closed:
+                    self.conn = tiger_bridge.connect(self.url, autocommit=True)
+                return self.conn.execute(sql, params).fetchone()
+            except Exception:
+                try:
+                    if self.conn:
+                        self.conn.close()
+                except Exception:  # noqa: BLE001
+                    pass
+                self.conn = None
+                raise
 
 
 def iso(t):
@@ -256,6 +274,107 @@ def overview(db, rng, sim=False):
     }
 
 
+# Supervisor activity log (tables in db/activity_log.sql): inspections, corrective actions
+# and follow-ups that supervisors record against zones, hats and hazards.
+ACTIVITY_TYPES = {"Inspection", "Corrective action", "Status update", "Note"}
+ACTIVITY_STATUSES = {"Open", "In Progress", "Resolved"}
+
+
+def activity_entries(db, include_sim=False):
+    rows = db.query("""
+        SELECT a.id, a.created_at, a.updated_at, a.supervisor, a.action_type, a.status,
+               a.zone, a.device_id, a.hazard, a.summary, a.details, a.follow_up, a.simulated,
+               coalesce(jsonb_agg(jsonb_build_object(
+                   'changed_at', h.changed_at, 'changed_by', h.changed_by,
+                   'note', h.note, 'status', h.status) ORDER BY h.changed_at)
+                   FILTER (WHERE h.id IS NOT NULL), '[]'::jsonb) AS history
+        FROM supervisor_activity a
+        LEFT JOIN supervisor_activity_history h ON h.activity_id = a.id
+        WHERE (%(include_sim)s OR NOT a.simulated)
+        GROUP BY a.id ORDER BY a.created_at DESC LIMIT 250""", {"include_sim": include_sim})
+    keys = ("id", "created_at", "updated_at", "supervisor", "action_type", "status", "zone",
+            "device_id", "hazard", "summary", "details", "follow_up", "simulated", "history")
+    entries = []
+    for row in rows:
+        item = dict(zip(keys, row))
+        item["created_at"], item["updated_at"] = iso(item["created_at"]), iso(item["updated_at"])
+        entries.append(item)
+    devices = db.query("SELECT device_id, name FROM workers WHERE (%(sim)s OR NOT simulated) "
+                       "ORDER BY name, device_id", {"sim": include_sim})
+    return {"now": iso(datetime.now(timezone.utc)), "entries": entries,
+            "devices": [{"id": d, "name": n or d} for d, n in devices]}
+
+
+def read_json_body(handler):
+    # Requiring a JSON content type also stops other websites posting here: a cross-site
+    # request with this header needs a CORS preflight, which this server doesn't answer.
+    if handler.headers.get("Content-Type", "").split(";")[0].strip().lower() != "application/json":
+        raise ValueError("Content-Type must be application/json")
+    try:
+        length = int(handler.headers.get("Content-Length", "0"))
+    except ValueError:
+        raise ValueError("Invalid Content-Length")
+    if length <= 0 or length > 16000:
+        raise ValueError("Request body must be between 1 and 16000 bytes")
+    try:
+        data = json.loads(handler.rfile.read(length))
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        raise ValueError("Request body must be valid JSON")
+    if not isinstance(data, dict):
+        raise ValueError("Request body must be a JSON object")
+    return data
+
+
+def clean_text(value, field, max_length, required=False):
+    value = str(value or "").strip()
+    if required and not value:
+        raise ValueError(f"{field} is required")
+    if len(value) > max_length:
+        raise ValueError(f"{field} must be {max_length} characters or fewer")
+    return value or None
+
+
+def add_activity(db, data):
+    supervisor = clean_text(data.get("supervisor"), "Supervisor name", 100, True)
+    action_type = clean_text(data.get("action_type"), "Entry type", 40, True)
+    status = clean_text(data.get("status", "Open"), "Status", 20, True)
+    summary = clean_text(data.get("summary"), "Summary", 180, True)
+    if action_type not in ACTIVITY_TYPES:
+        raise ValueError("Entry type is not supported")
+    if status not in ACTIVITY_STATUSES:
+        raise ValueError("Status is not supported")
+    row = db.write("""
+        WITH created AS (
+            INSERT INTO supervisor_activity (supervisor, action_type, status, zone, device_id,
+                                             hazard, summary, details, follow_up, simulated)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id, status)
+        INSERT INTO supervisor_activity_history (activity_id, changed_by, status, note)
+        SELECT id, %s, status, 'Entry created' FROM created RETURNING activity_id""",
+        (supervisor, action_type, status, clean_text(data.get("zone"), "Zone", 120),
+         clean_text(data.get("device_id"), "Worker / hat", 80),
+         clean_text(data.get("hazard"), "Hazard category", 80), summary,
+         clean_text(data.get("details"), "Details", 4000),
+         clean_text(data.get("follow_up"), "Follow-up", 1500), bool(data.get("simulated", False)),
+         supervisor))
+    return {"ok": True, "id": row[0]}
+
+
+def update_activity(db, activity_id, data):
+    supervisor = clean_text(data.get("supervisor"), "Supervisor name", 100, True)
+    note = clean_text(data.get("update_note"), "Update note", 1000, True)
+    status = clean_text(data.get("status"), "Status", 20, True)
+    if status not in ACTIVITY_STATUSES:
+        raise ValueError("Status is not supported")
+    row = db.write("""
+        WITH updated AS (
+            UPDATE supervisor_activity SET status = %s, updated_at = now()
+            WHERE id = %s RETURNING id, status)
+        INSERT INTO supervisor_activity_history (activity_id, changed_by, status, note)
+        SELECT id, %s, status, %s FROM updated RETURNING activity_id, status""",
+        (status, activity_id, supervisor, note))
+    return {"ok": True, "id": row[0], "status": row[1]} if row else None
+
+
 def make_handler(db):
     class Handler(BaseHTTPRequestHandler):
         def _send(self, code, body, ctype):
@@ -264,6 +383,7 @@ def make_handler(db):
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(data)))
             self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
             self.end_headers()
             self.wfile.write(data)
 
@@ -282,8 +402,36 @@ def make_handler(db):
                 except Exception as e:  # noqa: BLE001
                     msg = str(e).splitlines()[0][:300]
                     self._send(503, json.dumps({"error": f"{type(e).__name__}: {msg}"}), "application/json")
+            elif u.path == "/api/activity":
+                sim = parse_qs(u.query).get("sim", ["0"])[0] == "1"
+                self._api(lambda: (200, activity_entries(db, sim)))
             else:
                 self._send(404, "not found", "text/plain")
+
+        def do_POST(self):
+            if urlparse(self.path).path != "/api/activity":
+                return self._send(404, "not found", "text/plain")
+            self._api(lambda: (201, add_activity(db, read_json_body(self))))
+
+        def do_PATCH(self):
+            m = re.fullmatch(r"/api/activity/(\d+)", urlparse(self.path).path)
+            if not m:
+                return self._send(404, "not found", "text/plain")
+
+            def run():
+                out = update_activity(db, int(m.group(1)), read_json_body(self))
+                return (200, out) if out else (404, {"error": "Activity entry not found"})
+            self._api(run)
+
+        def _api(self, fn):
+            try:
+                code, payload = fn()
+                self._send(code, json.dumps(payload, default=str), "application/json")
+            except ValueError as e:
+                self._send(400, json.dumps({"error": str(e)}), "application/json")
+            except Exception as e:  # noqa: BLE001
+                msg = str(e).splitlines()[0][:300]
+                self._send(503, json.dumps({"error": f"{type(e).__name__}: {msg}"}), "application/json")
 
         def log_message(self, fmt, *args):  # keep the console quiet
             pass
