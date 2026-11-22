@@ -8,7 +8,7 @@ so the laptop lends both:
     the laptop over Bluetooth and make it the default output device.
   - stores every event in Tiger Cloud (scripts/tiger_bridge.py) when TIGER_DATABASE_URL is
     set in .env; events are buffered locally if the connection drops.
-  - listens for spoken commands (scripts/voice_commands.py): "I need help" / "mayday" sends an
+  - listens for spoken commands (scripts/voice_commands.py): "help help" / "I need help" sends an
     SOS; "call nine one one" then "confirm" places a SIMULATED 911 call (nothing is dialled).
 
 Run from the project root on the laptop (needs: pip install sounddevice numpy):

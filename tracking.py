@@ -98,7 +98,7 @@ class Track:
         self.lying_since = None
         self.announced = False
         self.below_since = None
-        self.aspects = deque([aspect(box)] if self.full else [], maxlen=30)   # full-body views only
+        self.aspects = deque([aspect(box)] if self.shape_ok else [], maxlen=30)   # usable views only
         self.down_frames = 0
         self.armed = {"DOWN": True, "CLOSE": True, "APPROACH": True}
         self.visible = True
@@ -115,7 +115,7 @@ class Track:
         self.frames += 1
         self.areas.append((t, area(box), self.clipped))
         self._add_path(t)
-        if self.full:
+        if self.shape_ok:
             self.aspects.append(aspect(box))
         if sig is not None:
             self.sig = sig if self.sig is None else 0.8 * self.sig + 0.2 * sig
@@ -138,13 +138,31 @@ class Track:
         m = 8
         return x0 > m and y0 > m and x1 < w - m and y1 < h - m
 
-    def on_floor(self, min_frac=0.02):
-        """Could be someone lying on the ground: whole body in view, low in the image (the
-        camera is at head height), and not a tiny far-away box."""
+    def edges(self, m=8):
+        """Which frame edges the box touches."""
         w, h = Track.frame_size
         x0, y0, x1, y1 = self.box
-        return (self.full and (y0 + y1) / 2 >= 0.45 * h
-                and (x1 - x0) * (y1 - y0) >= min_frac * w * h)
+        return {"left": x0 <= m, "top": y0 <= m, "right": x1 >= w - m, "bottom": y1 >= h - m}
+
+    @property
+    def shape_ok(self):
+        """The box's shape says something about standing vs lying. The camera is close, so a
+        body often runs off the top, the bottom or one side; that's fine. A box touching both
+        sides is a torso filling the view, and its shape means nothing."""
+        e = self.edges()
+        return not (e["left"] and e["right"])
+
+    def on_floor(self, min_frac=0.02):
+        """Could be someone lying on the ground: low in the image (the camera is at head
+        height) and not a tiny far-away box. A lying body may run off one side or the bottom
+        of the view. Rejected: a box touching the top (a head too close to judge), a box
+        touching both sides, and a thin strip along the bottom edge (head and shoulders)."""
+        w, h = Track.frame_size
+        x0, y0, x1, y1 = self.box
+        e = self.edges()
+        if e["top"] or not self.shape_ok or (e["bottom"] and y0 > 0.6 * h):
+            return False
+        return (y0 + y1) / 2 >= 0.45 * h and (x1 - x0) * (y1 - y0) >= min_frac * w * h
 
     def likeness(self, sig):
         """Best colour match against any of this track's remembered looks."""
@@ -161,7 +179,7 @@ class Tracker:
 
     def __init__(self, iou_min=0.25, max_dist=0.2, lost_after_s=1.0, memory_s=120.0,
                  reid_min=0.6, close_area=0.35, approach_ratio=1.8, approach_window_s=1.5,
-                 stand_aspect=1.3, down_aspect=0.9, down_frames=2, settle_s=1.0, rearm_s=3.0,
+                 stand_aspect=1.3, down_aspect=0.9, down_frames=8, settle_s=1.0, rearm_s=3.0,
                  lying_still_s=5.0, ttc_alert_s=3.0, motion_window_s=1.5):
         self.iou_min, self.max_dist = iou_min, max_dist
         self.lost_after_s, self.memory_s, self.reid_min = lost_after_s, memory_s, reid_min
@@ -351,11 +369,11 @@ class Tracker:
         if tr.name == "person":
             a = aspect(tr.box)
             floor = tr.on_floor()
-            seen_upright = [x for x in list(tr.aspects)[:-1]] if tr.full else list(tr.aspects)
+            seen_upright = list(tr.aspects)[:-1] if tr.shape_ok else list(tr.aspects)
             usual = float(np.median(seen_upright)) if len(seen_upright) >= 3 else 0.0
             if floor and usual >= self.stand_aspect and a <= self.down_aspect:
                 tr.down_frames += 1
-            elif tr.full and a >= self.stand_aspect:
+            elif tr.shape_ok and a >= self.stand_aspect:
                 tr.down_frames = 0
                 tr.armed["DOWN"] = True
             elif not floor:

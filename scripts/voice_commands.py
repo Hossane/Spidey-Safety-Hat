@@ -1,7 +1,7 @@
 """Spoken commands for Hat Detect, recognised offline on the laptop (Windows' built-in
 speech recogniser, a fixed phrase list, no internet).
 
-    "I need help" / "help help" / "mayday" / "emergency"  -> SOS alert to the site dashboard
+    "help help" / "I need help"                           -> SOS alert to the site dashboard
     "call nine one one"                                  -> asks for confirmation
         "confirm" (within 10 s)                          -> SIMULATED 911 call (proof of concept)
         "cancel"                                         -> cancelled
@@ -23,12 +23,21 @@ import threading
 import time
 
 PHRASES = {
-    "SOS": ["i need help", "help help", "somebody help me", "safe hat help", "mayday", "emergency", "help me"],
+    "SOS": ["help help", "i need help"],   # plain "help" / "help me" sound too much like "hello"
     "CALL": ["call nine one one", "call 911"],
     "CONFIRM": ["confirm", "confirm call"],
     "CANCEL": ["cancel", "cancel call"],
+    # Decoys: words that sound like a command. The recogniser can only pick from this list,
+    # so without them "hello" or "yellow" comes back as "help". They match nothing.
+    "NOISE": ["hello", "hello there", "yellow", "kelp", "hell", "held", "helmet", "helpful", "well", "hey",
+              "hold on", "health", "self", "shelf", "elf", "yell", "help out", "help me out",
+              "can sell", "cancer", "council", "counsel", "candle", "camp", "concern", "conference",
+              "confirmed", "comfort", "conform", "information", "call me", "call you", "call back",
+              "nine", "one", "okay", "yes", "no", "thanks", "what", "the", "and", "I",
+              "help", "help me", "hello hello", "hey hello", "somebody", "somebody hold this", "i need",
+              "i need that", "need a hand", "some help", "save that", "safe", "safety"],
 }
-MIN_CONFIDENCE = {"SOS": 0.6, "CALL": 0.75, "CONFIRM": 0.7, "CANCEL": 0.6}
+MIN_CONFIDENCE = {"NOISE": 2.0, "SOS": 0.85, "CALL": 0.8, "CONFIRM": 0.7, "CANCEL": 0.7}
 CONFIRM_WINDOW_S = 10.0
 
 # PowerShell host for System.Speech: prints "REC|phrase|confidence" per recognition.
@@ -82,7 +91,7 @@ class VoiceCommands:
         for line in self.proc.stdout:
             line = line.strip()
             if line == "READY":
-                self.log("[voice] listening for: I need help, help help, mayday, emergency, call nine one one (then confirm)")
+                self.log("[voice] listening for: help help, I need help, call nine one one (then confirm)")
                 continue
             if not line.startswith("REC|"):
                 continue
@@ -123,7 +132,7 @@ def recognise_text(text):
     wav = os.path.join(tempfile.mkdtemp(), "phrase.wav")
     subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command",
                     "Add-Type -AssemblyName System.Speech; $s = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
-                    f"$s.SetOutputToWaveFile('{wav}'); $s.Speak('{text}'); $s.Dispose()"], check=True)
+                    f"$s.SetOutputToWaveFile('{wav}'); $s.Speak('{text.replace(chr(39), chr(39) * 2)}'); $s.Dispose()"], check=True)
     out = start_recogniser(wav).communicate(timeout=60)[0]
     os.remove(wav)
     return [(l.split("|")[1], float(l.split("|")[2].replace(",", "."))) for l in out.splitlines() if l.startswith("REC|")]
@@ -134,8 +143,8 @@ def selftest():
     vc = VoiceCommands.__new__(VoiceCommands)          # no live mic: drive handle() directly
     vc.on_command, vc.muted, vc.pending_call = (lambda k, t, c: events.append(k)), (lambda: False), None
     ok = True
-    for said, expect in [("I need help", "SOS"), ("help help", "SOS"), ("mayday", "SOS"), ("call nine one one", "CALL"), ("confirm", "CONFIRM"),
-                         ("cancel", "CANCEL"), ("emergency", "SOS")]:
+    for said, expect in [("I need help", "SOS"), ("help help", "SOS"),
+                         ("call nine one one", "CALL"), ("confirm", "CONFIRM"), ("cancel", "CANCEL")]:
         got = recognise_text(said)
         kind = kind_of(got[0][0]) if got else None
         good = kind == expect and got[0][1] >= MIN_CONFIDENCE[kind]
