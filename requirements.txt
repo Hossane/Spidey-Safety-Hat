@@ -1,5 +1,5 @@
 # Laptop-side only: testing models and running the Tiger Data bridge.
-# Nothing here runs on the Pi; the Pi uses the C++ TensorFlow Lite library.
+# Nothing here runs on the Pi; the Pi uses tflite_runtime from QNX's apk repo (see models/README.md).
 
 # --- Tiger Data bridge (Pi events -> Tiger Cloud) ---
 psycopg[binary]>=3.1    # Postgres driver for Tiger Cloud / TimescaleDB
